@@ -12,12 +12,13 @@ An interactive terminal tool for auditing Mac disk usage with a **Safe Cleanup W
 - **Safe Cleanup Wizard** — Pattern-based 3-tier classifier that separates safe, review-needed, and protected files
 - **Large File Search** — Find files above a minimum size threshold
 - **Cloud & Sync Audit** — Read-only reporting of OneDrive, iCloud, Dropbox, WhatsApp, Telegram footprints
-- **LM Studio Manager** — Inventory and optional cleanup of AI model downloads
+- **LM Studio Manager** — Inventory and optional cleanup of LM Studio model downloads
+- **Ollama Manager** — Inventory and optional cleanup of Ollama model downloads
 - **App Support Deep Dive** — Drill down into `~/Library/Application Support` for cache discovery
 - **AI Tools Audit** — Detailed footprint of IDE and AI tool installations
 - **Storage Reports** — Export findings to a timestamped text file
 
-### The Safe Cleanup Wizard (Option 10)
+### The Safe Cleanup Wizard (Option 11)
 
 The core feature uses a **3-tier classification model**:
 
@@ -66,29 +67,31 @@ You'll see an interactive menu with options 1–11 plus exit (0). Each option ru
 | 3 | Interactive Clean | Itemized selection for IDE caches, LM Studio models, extensions |
 | 4 | AI Tools Audit | List IDE/tool footprints (Cursor, Copilot, LM Studio, etc.) |
 | 5 | App Support Deep | Explore `~/Library/Application Support` for cache patterns |
-| 6 | LM Studio Manager | Inventory and optional deletion of AI models |
-| 7 | Cloud Audit | Read-only report: OneDrive, iCloud, Dropbox, messaging app sizes |
-| 8 | Save Report | Export findings to timestamped plain-text file |
-| 9 | Large File Search | Find files above a user-specified size threshold |
-| 10 | Safe Wizard | **Core feature** — pattern-based 3-tier classifier with bulk/itemized options |
-| 11 | Generate Feedback | Create diagnostic Markdown report for debugging or Claude Code integration |
+| 6 | LM Studio Manager | Inventory and optional deletion of LM Studio models |
+| 7 | Ollama Manager | Inventory and optional deletion of Ollama models |
+| 8 | Cloud Audit | Read-only report: OneDrive, iCloud, Dropbox, messaging app sizes |
+| 9 | Save Report | Export findings to timestamped plain-text file |
+| 10 | Large File Search | Find files above a user-specified size threshold |
+| 11 | Safe Wizard | **Core feature** — pattern-based 3-tier classifier with bulk/itemized options |
+| 12 | Generate Feedback | Create diagnostic Markdown report for debugging or Claude Code integration |
 | 0 | Exit | — |
 
 ### Common Workflows
 
 **Quick cleanup:**
 - Option 2 (Quick Clean) for automatic removal of well-known safe paths
-- Or Option 10 (Safe Wizard) for guided, pattern-based selection
+- Or Option 11 (Safe Wizard) for guided, pattern-based selection
 
 **Investigate disk usage:**
 - Option 1 (Full Audit) for a complete overview
-- Option 9 (Large File Search) to find specific size ranges
-- Option 7 (Cloud Audit) to see sync folder sizes without deletion
+- Option 10 (Large File Search) to find specific size ranges
+- Option 8 (Cloud Audit) to see sync folder sizes without deletion
 
 **Deep maintenance:**
 - Option 5 (App Support Deep Dive) to explore `~/Library/Application Support`
-- Option 6 (LM Studio Manager) to review AI model downloads
-- Option 11 (Generate Feedback) to create a diagnostic report
+- Option 6 (LM Studio Manager) to review LM Studio model downloads
+- Option 7 (Ollama Manager) to review Ollama model downloads
+- Option 12 (Generate Feedback) to create a diagnostic report
 
 ## Safety Design
 

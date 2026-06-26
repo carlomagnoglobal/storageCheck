@@ -54,7 +54,7 @@ main_menu() {
   clear
   echo ""
   echo -e "${BMAGENTA}╔══════════════════════════════════════════════════════════╗${RESET}"
-  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.2                         ║${RESET}"
+  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.3                         ║${RESET}"
   echo -e "${BMAGENTA}║     $(date '+%a %d %b %Y — %H:%M')                              ║${RESET}"
   echo -e "${BMAGENTA}╚══════════════════════════════════════════════════════════╝${RESET}"
   echo ""
@@ -82,11 +82,12 @@ main_menu() {
   echo -e "  ${BOLD}4)${RESET}  🤖  AI Tools Audit          ${DIM}IDEs, models, extensions${RESET}"
   echo -e "  ${BOLD}5)${RESET}  📦  App Support Deep Dive   ${DIM}find hidden data${RESET}"
   echo -e "  ${BOLD}6)${RESET}  🧠  LM Studio Manager       ${DIM}manage local AI models${RESET}"
-  echo -e "  ${BOLD}7)${RESET}  ☁️   Cloud & Sync Audit      ${DIM}OneDrive, iCloud, Dropbox${RESET}"
-  echo -e "  ${BOLD}8)${RESET}  📝  Save Report to File     ${DIM}export full audit${RESET}"
-  echo -e "  ${BOLD}9)${RESET}  🔍  Find Large Files        ${DIM}files above a chosen size${RESET}"
-  echo -e "  ${BGREEN}${BOLD} 10) 🪄  SAFE CLEANUP WIZARD${RESET}    ${DIM}guided, OS-safe, pick what to free${RESET}"
-  echo -e "  ${BCYAN}${BOLD} 11) 🧬  GENERATE FEEDBACK FILE${RESET} ${DIM}diagnostic dump for Claude Code${RESET}"
+  echo -e "  ${BOLD}7)${RESET}  🦙  Ollama Manager          ${DIM}manage Ollama AI models${RESET}"
+  echo -e "  ${BOLD}8)${RESET}  ☁️   Cloud & Sync Audit      ${DIM}OneDrive, iCloud, Dropbox${RESET}"
+  echo -e "  ${BOLD}9)${RESET}  📝  Save Report to File     ${DIM}export full audit${RESET}"
+  echo -e "  ${BOLD}10)${RESET}  🔍  Find Large Files        ${DIM}files above a chosen size${RESET}"
+  echo -e "  ${BGREEN}${BOLD} 11) 🪄  SAFE CLEANUP WIZARD${RESET}    ${DIM}guided, OS-safe, pick what to free${RESET}"
+  echo -e "  ${BCYAN}${BOLD} 12) 🧬  GENERATE FEEDBACK FILE${RESET} ${DIM}diagnostic dump for Claude Code${RESET}"
   echo -e "  ${BOLD} 0)${RESET}  ❌  Exit"
   divider
   echo -ne "\n  ${BCYAN}Choose an option: ${RESET}"
@@ -95,9 +96,9 @@ main_menu() {
     1) full_audit ;;       2) quick_clean ;;
     3) interactive_clean ;;4) ai_tools_audit ;;
     5) app_support_deep ;; 6) lmstudio_manager ;;
-    7) cloud_audit ;;      8) save_report ;;
-    9) find_large_files ;; 10) safe_wizard ;;
-    11) generate_feedback ;;
+    7) ollama_manager ;;   8) cloud_audit ;;
+    9) save_report ;;      10) find_large_files ;;
+    11) safe_wizard ;;     12) generate_feedback ;;
     0) echo -e "\n  ${BGREEN}Goodbye! 👋${RESET}\n"; exit 0 ;;
     *) warning "Invalid option"; sleep 1; main_menu ;;
   esac
@@ -528,7 +529,35 @@ lmstudio_manager() {
 }
 
 # ══════════════════════════════════════════════════════════════
-#   7) CLOUD & SYNC AUDIT
+#   7) OLLAMA MANAGER
+# ══════════════════════════════════════════════════════════════
+ollama_manager() {
+  clear
+  section "🦙 OLLAMA MODEL MANAGER"
+  [ ! -d ~/.ollama ] && { info "Ollama not found."; _back_to_menu; return; }
+  echo -e "  Total: ${BRED}${BOLD}$(du -sh ~/.ollama 2>/dev/null|cut -f1)${RESET}\n"
+  section "Models"
+  if [ -d ~/.ollama/models/blobs ]; then
+    du -sh ~/.ollama/models/blobs/* 2>/dev/null | sort -rh | \
+      while read s p; do printf "  %-10s %s\n" "$(color_size $s)" "$(basename "$p")"; done
+  fi
+  if command -v ollama >/dev/null 2>&1; then
+    section "Installed (via ollama list)"
+    ollama list 2>/dev/null | tail -n +2 | while read name id size modified rest; do
+      printf "  %-30s %-10s %s\n" "$name" "$size" "$modified $rest"
+    done
+  fi
+  echo ""; info "Models re-download anytime via: ollama pull <model>"
+  if confirm "Start interactive model deletion?"; then
+    for m in ~/.ollama/models/manifests/registry.ollama.ai/*/*/; do
+      [ -d "$m" ] && safe_delete "$m" "Model: $(basename "$(dirname "$m")")/$(basename "$m")"
+    done
+  fi
+  _back_to_menu
+}
+
+# ══════════════════════════════════════════════════════════════
+#   8) CLOUD & SYNC AUDIT
 # ══════════════════════════════════════════════════════════════
 cloud_audit() {
   clear
@@ -575,6 +604,7 @@ save_report() {
     echo ""; echo "CACHES"; du -sh ~/Library/Caches/*/ 2>/dev/null | sort -rh
     echo ""; echo "USER APPS"; [ -d ~/Applications ] && du -sh ~/Applications/*/ 2>/dev/null | sort -rh
     echo ""; echo "LM STUDIO MODELS"; [ -d ~/.lmstudio/models ] && du -sh ~/.lmstudio/models/*/ 2>/dev/null | sort -rh
+    echo ""; echo "OLLAMA MODELS"; [ -d ~/.ollama/models ] && du -sh ~/.ollama/models/blobs/* 2>/dev/null | sort -rh
   } > "$REPORT_FILE"
   success "Saved: ${BYELLOW}$REPORT_FILE${RESET}"; info "Open with: open $REPORT_FILE"
   _back_to_menu
@@ -609,6 +639,7 @@ _print_recommendations() {
   [ "$ide" -gt 3 ] && { warning "${ide} IDEs in ~/Applications ($(du -sh ~/Applications 2>/dev/null|cut -f1)) — uninstall unused"; found=1; }
   [ -d "$HOME/Library/Group Containers/UBF8T346G9.OneDriveSyncClientSuite" ] && { warning "OneDrive local data — use Files On-Demand"; found=1; }
   [ -d ~/.lmstudio/models ] && { info "LM Studio models: $(du -sh ~/.lmstudio/models 2>/dev/null|cut -f1) — option 6 to manage"; found=1; }
+  [ -d ~/.ollama/models ] && { info "Ollama models: $(du -sh ~/.ollama/models 2>/dev/null|cut -f1) — option 7 to manage"; found=1; }
   [ "$found" -eq 0 ] && success "Looks clean! 🎉"
 }
 
