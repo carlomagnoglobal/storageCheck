@@ -54,7 +54,7 @@ main_menu() {
   clear
   echo ""
   echo -e "${BMAGENTA}╔══════════════════════════════════════════════════════════╗${RESET}"
-  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.3                         ║${RESET}"
+  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.4                         ║${RESET}"
   echo -e "${BMAGENTA}║     $(date '+%a %d %b %Y — %H:%M')                              ║${RESET}"
   echo -e "${BMAGENTA}╚══════════════════════════════════════════════════════════╝${RESET}"
   echo ""
@@ -88,6 +88,7 @@ main_menu() {
   echo -e "  ${BOLD}10)${RESET}  🔍  Find Large Files        ${DIM}files above a chosen size${RESET}"
   echo -e "  ${BGREEN}${BOLD} 11) 🪄  SAFE CLEANUP WIZARD${RESET}    ${DIM}guided, OS-safe, pick what to free${RESET}"
   echo -e "  ${BCYAN}${BOLD} 12) 🧬  GENERATE FEEDBACK FILE${RESET} ${DIM}diagnostic dump for Claude Code${RESET}"
+  echo -e "  ${BOLD}13)${RESET}  ⏱️   Time Machine & Backups  ${DIM}snapshots, iOS backups${RESET}"
   echo -e "  ${BOLD} 0)${RESET}  ❌  Exit"
   divider
   echo -ne "\n  ${BCYAN}Choose an option: ${RESET}"
@@ -99,6 +100,7 @@ main_menu() {
     7) ollama_manager ;;   8) cloud_audit ;;
     9) save_report ;;      10) find_large_files ;;
     11) safe_wizard ;;     12) generate_feedback ;;
+    13) time_machine_manager ;;
     0) echo -e "\n  ${BGREEN}Goodbye! 👋${RESET}\n"; exit 0 ;;
     *) warning "Invalid option"; sleep 1; main_menu ;;
   esac
@@ -947,6 +949,48 @@ generate_feedback() {
   echo -e "      ${DIM}open \"$FB\"${RESET}"
   echo -e "      ${DIM}# or inside Claude Code:  cat \"$FB\"${RESET}"
   divider
+  _back_to_menu
+}
+
+# ══════════════════════════════════════════════════════════════
+#  13) TIME MACHINE & BACKUPS MANAGER
+# ══════════════════════════════════════════════════════════════
+time_machine_manager() {
+  clear
+  section "⏱️  TIME MACHINE & BACKUPS MANAGER"
+
+  section "Local Time Machine Snapshots"
+  local snaps
+  snaps=$(tmutil listlocalsnapshots / 2>/dev/null | grep -i snapshot)
+  if [ -z "$snaps" ]; then
+    success "No local snapshots"
+  else
+    echo "$snaps" | while read s; do warning "$s"; done
+    local snap_count
+    snap_count=$(tmutil listlocalsnapshotdates / 2>/dev/null | grep -v '^$' | wc -l | tr -d ' ')
+    info "$snap_count snapshot(s) found — safe to delete, macOS recreates them automatically"
+    echo ""
+    if confirm "Delete ALL local Time Machine snapshots?"; then
+      tmutil deletelocalsnapshots / 2>/dev/null && success "All local snapshots deleted" \
+        || warning "Could not delete snapshots (may require Full Disk Access)"
+    fi
+  fi
+
+  section "iOS / iPadOS Device Backups (MobileSync)"
+  local mb="$HOME/Library/Application Support/MobileSync/Backup"
+  if [ ! -d "$mb" ] || [ -z "$(ls -A "$mb" 2>/dev/null)" ]; then
+    success "No device backups found"
+  else
+    local total
+    total=$(du -sh "$mb" 2>/dev/null | cut -f1)
+    warning "Total device backups: $total"
+    info "Each folder below is one device backup"
+    echo ""
+    for bk in "$mb"/*/; do
+      [ -d "$bk" ] && safe_delete "$bk" "Device backup: $(basename "$bk")"
+    done
+  fi
+
   _back_to_menu
 }
 

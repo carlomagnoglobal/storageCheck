@@ -74,6 +74,7 @@ You'll see an interactive menu with options 1–11 plus exit (0). Each option ru
 | 10 | Large File Search | Find files above a user-specified size threshold |
 | 11 | Safe Wizard | **Core feature** — pattern-based 3-tier classifier with bulk/itemized options |
 | 12 | Generate Feedback | Create diagnostic Markdown report for debugging or Claude Code integration |
+| 13 | Time Machine & Backups | Delete local TM snapshots and iOS device backups |
 | 0 | Exit | — |
 
 ### Common Workflows
@@ -91,6 +92,7 @@ You'll see an interactive menu with options 1–11 plus exit (0). Each option ru
 - Option 5 (App Support Deep Dive) to explore `~/Library/Application Support`
 - Option 6 (LM Studio Manager) to review LM Studio model downloads
 - Option 7 (Ollama Manager) to review Ollama model downloads
+- Option 13 (Time Machine & Backups) to delete local snapshots and iOS device backups
 - Option 12 (Generate Feedback) to create a diagnostic report
 
 ## Safety Design
