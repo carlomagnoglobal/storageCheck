@@ -536,22 +536,30 @@ ollama_manager() {
   section "🦙 OLLAMA MODEL MANAGER"
   [ ! -d ~/.ollama ] && { info "Ollama not found."; _back_to_menu; return; }
   echo -e "  Total: ${BRED}${BOLD}$(du -sh ~/.ollama 2>/dev/null|cut -f1)${RESET}\n"
-  section "Models"
-  if [ -d ~/.ollama/models/blobs ]; then
-    du -sh ~/.ollama/models/blobs/* 2>/dev/null | sort -rh | \
-      while read s p; do printf "  %-10s %s\n" "$(color_size $s)" "$(basename "$p")"; done
-  fi
+  section "Directory Breakdown"
+  du -sh ~/.ollama/*/ 2>/dev/null | sort -rh | while read s p; do
+    printf "  %-10s %s\n" "$(color_size $s)" "$(basename "$p")"
+  done
   if command -v ollama >/dev/null 2>&1; then
-    section "Installed (via ollama list)"
-    ollama list 2>/dev/null | tail -n +2 | while read name id size modified rest; do
-      printf "  %-30s %-10s %s\n" "$name" "$size" "$modified $rest"
-    done
+    echo ""
+    section "Installed Models (ollama list)"
+    local models=$(ollama list 2>/dev/null | tail -n +2)
+    if [ -z "$models" ]; then
+      info "No models installed"
+    else
+      echo "$models" | while read name id size modified; do
+        printf "  %-30s %-10s %s\n" "$name" "$size" "$modified"
+      done
+    fi
   fi
   echo ""; info "Models re-download anytime via: ollama pull <model>"
   if confirm "Start interactive model deletion?"; then
-    for m in ~/.ollama/models/manifests/registry.ollama.ai/*/*/; do
-      [ -d "$m" ] && safe_delete "$m" "Model: $(basename "$(dirname "$m")")/$(basename "$m")"
-    done
+    if command -v ollama >/dev/null 2>&1; then
+      ollama list 2>/dev/null | tail -n +2 | while read name id size modified; do
+        echo "  Removing: $name"
+        ollama rm "$name" 2>/dev/null
+      done
+    fi
   fi
   _back_to_menu
 }
