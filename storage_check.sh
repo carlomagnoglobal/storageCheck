@@ -54,7 +54,7 @@ main_menu() {
   clear
   echo ""
   echo -e "${BMAGENTA}╔══════════════════════════════════════════════════════════╗${RESET}"
-  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.4                         ║${RESET}"
+  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.5                         ║${RESET}"
   echo -e "${BMAGENTA}║     $(date '+%a %d %b %Y — %H:%M')                              ║${RESET}"
   echo -e "${BMAGENTA}╚══════════════════════════════════════════════════════════╝${RESET}"
   echo ""
@@ -89,6 +89,7 @@ main_menu() {
   echo -e "  ${BGREEN}${BOLD} 11) 🪄  SAFE CLEANUP WIZARD${RESET}    ${DIM}guided, OS-safe, pick what to free${RESET}"
   echo -e "  ${BCYAN}${BOLD} 12) 🧬  GENERATE FEEDBACK FILE${RESET} ${DIM}diagnostic dump for Claude Code${RESET}"
   echo -e "  ${BOLD}13)${RESET}  ⏱️   Time Machine & Backups  ${DIM}snapshots, iOS backups${RESET}"
+  echo -e "  ${BOLD}14)${RESET}  📱  Applications Manager     ${DIM}browse and uninstall apps${RESET}"
   echo -e "  ${BOLD} 0)${RESET}  ❌  Exit"
   divider
   echo -ne "\n  ${BCYAN}Choose an option: ${RESET}"
@@ -100,7 +101,7 @@ main_menu() {
     7) ollama_manager ;;   8) cloud_audit ;;
     9) save_report ;;      10) find_large_files ;;
     11) safe_wizard ;;     12) generate_feedback ;;
-    13) time_machine_manager ;;
+    13) time_machine_manager ;; 14) applications_manager ;;
     0) echo -e "\n  ${BGREEN}Goodbye! 👋${RESET}\n"; exit 0 ;;
     *) warning "Invalid option"; sleep 1; main_menu ;;
   esac
@@ -988,6 +989,53 @@ time_machine_manager() {
     echo ""
     for bk in "$mb"/*/; do
       [ -d "$bk" ] && safe_delete "$bk" "Device backup: $(basename "$bk")"
+    done
+  fi
+
+  _back_to_menu
+}
+
+# ══════════════════════════════════════════════════════════════
+#  14) APPLICATIONS MANAGER
+# ══════════════════════════════════════════════════════════════
+applications_manager() {
+  clear
+  section "📱 APPLICATIONS MANAGER"
+  echo -e "  ${DIM}Deletion moves the app to Trash — changes are permanent.${RESET}\n"
+
+  local found=0
+
+  section "/Applications  (system-wide)"
+  if [ -d /Applications ]; then
+    found=1
+    du -sk /Applications/*.app 2>/dev/null | sort -rn | while read kb path; do
+      printf "  %-10s %s\n" "$(color_size $(human_kb $kb))" "$(basename "$path")"
+    done
+  else
+    skipped "Not found"
+  fi
+
+  section "~/Applications  (user installs)"
+  if [ -d "$HOME/Applications" ]; then
+    found=1
+    du -sk "$HOME/Applications"/*.app 2>/dev/null | sort -rn | while read kb path; do
+      printf "  %-10s %s\n" "$(color_size $(human_kb $kb))" "$(basename "$path")"
+    done
+  else
+    skipped "Not found"
+  fi
+
+  [ "$found" -eq 0 ] && { info "No applications found."; _back_to_menu; return; }
+
+  echo ""
+  info "Total /Applications: $(du -sh /Applications 2>/dev/null | cut -f1)"
+  [ -d "$HOME/Applications" ] && info "Total ~/Applications: $(du -sh "$HOME/Applications" 2>/dev/null | cut -f1)"
+
+  echo ""
+  if confirm "Start interactive app deletion?"; then
+    section "Select apps to delete"
+    for app in /Applications/*.app "$HOME/Applications"/*.app; do
+      [ -d "$app" ] && safe_delete "$app" "App: $(basename "$app")"
     done
   fi
 
