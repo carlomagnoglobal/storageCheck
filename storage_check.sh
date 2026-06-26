@@ -583,9 +583,19 @@ cloud_audit() {
   local ic="$HOME/Library/Mobile Documents"
   [ -d "$ic" ] && warning "iCloud local: $(du -sh "$ic" 2>/dev/null|cut -f1)" || success "No local data"
   section "Google Drive"
-  for gd in "$HOME/Library/Application Support/Google/DriveFS" "$HOME/Library/CloudStorage/GoogleDrive-"*; do
-    [ -d "$gd" ] && warning "Google Drive: $(du -sh "$gd" 2>/dev/null|cut -f1)"
+  local gd_found=0
+  if [ -d "$HOME/Library/Application Support/Google/DriveFS" ]; then
+    warning "Google Drive (DriveFS): $(du -sh "$HOME/Library/Application Support/Google/DriveFS" 2>/dev/null|cut -f1)"
+    gd_found=1
+  fi
+  for gd in "$HOME/Library/CloudStorage/GoogleDrive-"*; do
+    [ -d "$gd" ] && { warning "Google Drive (CloudStorage): $(du -sh "$gd" 2>/dev/null|cut -f1)"; gd_found=1; }
   done
+  [ "$gd_found" -eq 0 ] && success "Not found"
+  section "Dropbox"
+  local db="$HOME/Dropbox"
+  [ -d "$db" ] && { warning "Dropbox local: $(du -sh "$db" 2>/dev/null|cut -f1)"; \
+    info "Manage via Dropbox Settings"; } || success "Not found"
   section "Telegram"
   local tg="$HOME/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram"
   [ -d "$tg" ] && warning "Telegram: $(du -sh "$tg" 2>/dev/null|cut -f1)" || skipped "Not found"
