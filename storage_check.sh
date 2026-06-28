@@ -90,6 +90,7 @@ main_menu() {
   echo -e "  ${BCYAN}${BOLD} 12) 🧬  GENERATE FEEDBACK FILE${RESET} ${DIM}diagnostic dump for Claude Code${RESET}"
   echo -e "  ${BOLD}13)${RESET}  ⏱️   Time Machine & Backups  ${DIM}snapshots, iOS backups${RESET}"
   echo -e "  ${BOLD}14)${RESET}  📱  Applications Manager     ${DIM}browse and uninstall apps${RESET}"
+  echo -e "  ${BOLD}15)${RESET}  🔌  VSCode & Variants        ${DIM}extensions: browse, delete, backup${RESET}"
   echo -e "  ${BOLD} 0)${RESET}  ❌  Exit"
   divider
   echo -ne "\n  ${BCYAN}Choose an option: ${RESET}"
@@ -102,6 +103,7 @@ main_menu() {
     9) save_report ;;      10) find_large_files ;;
     11) safe_wizard ;;     12) generate_feedback ;;
     13) time_machine_manager ;; 14) applications_manager ;;
+    15) vscode_manager ;;
     0) echo -e "\n  ${BGREEN}Goodbye! 👋${RESET}\n"; exit 0 ;;
     *) warning "Invalid option"; sleep 1; main_menu ;;
   esac
@@ -1038,6 +1040,119 @@ applications_manager() {
       [ -d "$app" ] && safe_delete "$app" "App: $(basename "$app")"
     done
   fi
+
+  _back_to_menu
+}
+
+# ══════════════════════════════════════════════════════════════
+#   15) VSCODE EXTENSION MANAGER
+# ══════════════════════════════════════════════════════════════
+vscode_manager() {
+  local -a VARIANTS
+  local -a PATHS
+  local -a LABELS
+
+  VARIANTS=("$HOME/.vscode/extensions" "$HOME/.vscode-insiders/extensions" \
+            "$HOME/.vscode-oss/extensions" "$HOME/.vscodium/extensions" \
+            "$HOME/.cursor/extensions" "$HOME/.windsurf-next/extensions" \
+            "$HOME/.windsurf/extensions" "$HOME/.trae/extensions" \
+            "$HOME/.antigravity-ide/extensions" "$HOME/.devin/extensions" \
+            "$HOME/.positon/extensions" "$HOME/.kiro/extensions")
+
+  LABELS=("VS Code" "VS Code Insiders" "VSCodium (1)" "VSCodium (2)" \
+          "Cursor" "Windsurf (next)" "Windsurf" "Trae" \
+          "Antigravity IDE" "Devin" "Positon" "Kiro")
+
+  local found=0
+  local idx=0
+
+  clear
+  section "🔌 VSCODE EXTENSION MANAGER"
+
+  for var in "${VARIANTS[@]}"; do
+    if [ -d "$var" ]; then
+      PATHS+=("$var")
+      found=1
+    fi
+    ((idx++))
+  done
+
+  [ "$found" -eq 0 ] && { info "No VSCode-variant installations detected."; _back_to_menu; return; }
+
+  idx=0
+  for var in "${VARIANTS[@]}"; do
+    if [ -d "$var" ]; then
+      local label="${LABELS[$idx]}"
+      echo ""
+      section "── $label ──"
+      echo -e "  ${BOLD}Total: ${BRED}${BOLD}$(du -sh "$var" 2>/dev/null | cut -f1)${RESET}\n"
+
+      du -sh "$var"/*/ 2>/dev/null | sort -rh | while read size path; do
+        printf "  %-10s %s\n" "$(color_size $size)" "$(basename "$path")"
+      done
+    fi
+    ((idx++))
+  done
+
+  echo ""
+  info "Extension disable/enable: available only when IDE is running"
+  info "Use backup below to create recovery archives"
+  echo ""
+
+  local submenu_loop=1
+  while [ "$submenu_loop" -eq 1 ]; do
+    echo -ne "\n  ${BCYAN}[d]elete  [b]ackup  [q]uit: ${RESET}"
+    read -r subchoice
+    case "$subchoice" in
+      d)
+        if confirm "Delete all extensions from all detected variants?"; then
+          section "Deleting extensions"
+          idx=0
+          for var in "${VARIANTS[@]}"; do
+            if [ -d "$var" ]; then
+              local label="${LABELS[$idx]}"
+              for ext in "$var"/*/; do
+                [ -d "$ext" ] && safe_delete "$ext" "$(basename "$ext") [$label]"
+              done
+            fi
+            ((idx++))
+          done
+        fi
+        ;;
+      b)
+        section "Backing up extensions"
+        local backup_dir="$HOME/Desktop"
+        local timestamp=$(date '+%Y%m%d_%H%M%S')
+        local any_backed=0
+
+        idx=0
+        for var in "${VARIANTS[@]}"; do
+          if [ -d "$var" ]; then
+            local label="${LABELS[$idx]}"
+            local safe_label=$(echo "$label" | tr ' ()' '_' | tr '[:upper:]' '[:lower:]')
+            local backup_file="$backup_dir/${safe_label}_extensions_${timestamp}.tar.gz"
+
+            echo ""
+            echo -n "  Backing up $label... "
+            if tar -czf "$backup_file" -C "$(dirname "$var")" "$(basename "$var")" 2>/dev/null; then
+              local backup_size=$(du -sh "$backup_file" | cut -f1)
+              success "backed up to Desktop (${backup_size})"
+              success "$backup_file"
+            else
+              warning "failed to backup $label"
+            fi
+          fi
+          ((idx++))
+        done
+        ;;
+      q)
+        submenu_loop=0
+        ;;
+      *)
+        warning "Invalid option"
+        ;;
+    esac
+  done
 
   _back_to_menu
 }
