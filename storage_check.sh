@@ -45,6 +45,11 @@ confirm() {
   [[ "$answer" =~ ^[Yy]$ ]]
 }
 
+# Standard prompt for submenu action keys, e.g. ask_choice "d=delete  m=move  b=back"
+menu_group() { echo -e "\n  ${DIM}─── $1 ───${RESET}"; }
+ask_choice() { echo -ne "\n  ${BCYAN}$1 › ${RESET}"; }
+press_any_key() { echo ""; echo -ne "  ${DIM}Press any key to continue...${RESET}"; read -rn1; }
+
 REPORT_FILE="$HOME/storage_report_$(date '+%Y%m%d_%H%M%S').txt"
 
 # ══════════════════════════════════════════════════════════════
@@ -76,43 +81,56 @@ main_menu() {
   echo -e "  ${DIM}Used: ${used}  |  Free: ${avail}  |  Total: ${total}${RESET}"
   echo ""
   divider
-  echo -e "  ${BOLD}1)${RESET}  📊  Full Audit              ${DIM}scan everything${RESET}"
-  echo -e "  ${BOLD}2)${RESET}  🧹  Quick Clean             ${DIM}safe auto-cleanup, no prompts${RESET}"
-  echo -e "  ${BOLD}3)${RESET}  🎯  Interactive Clean       ${DIM}choose item by item${RESET}"
-  echo -e "  ${BOLD}4)${RESET}  🤖  AI Tools Audit          ${DIM}IDEs, models, extensions${RESET}"
-  echo -e "  ${BOLD}5)${RESET}  📦  App Support Deep Dive   ${DIM}find hidden data${RESET}"
-  echo -e "  ${BOLD}6)${RESET}  🧠  LM Studio Manager       ${DIM}manage local AI models${RESET}"
-  echo -e "  ${BOLD}7)${RESET}  🦙  Ollama Manager          ${DIM}manage Ollama AI models${RESET}"
-  echo -e "  ${BOLD}8)${RESET}  ☁️   Cloud & Sync Audit      ${DIM}OneDrive, iCloud, Dropbox${RESET}"
-  echo -e "  ${BOLD}9)${RESET}  📝  Save Report to File     ${DIM}export full audit${RESET}"
-  echo -e "  ${BOLD}10)${RESET}  🔍  Find Large Files        ${DIM}files above a chosen size${RESET}"
-  echo -e "  ${BGREEN}${BOLD} 11) 🪄  SAFE CLEANUP WIZARD${RESET}    ${DIM}guided, OS-safe, pick what to free${RESET}"
-  echo -e "  ${BCYAN}${BOLD} 12) 🧬  GENERATE FEEDBACK FILE${RESET} ${DIM}diagnostic dump for Claude Code${RESET}"
-  echo -e "  ${BOLD}13)${RESET}  ⏱️   Time Machine & Backups  ${DIM}snapshots, iOS backups${RESET}"
-  echo -e "  ${BOLD}14)${RESET}  📱  Applications Manager     ${DIM}browse, uninstall, or move apps to USB${RESET}"
-  echo -e "  ${BOLD}15)${RESET}  🔌  VSCode & Variants        ${DIM}extensions: browse, delete, backup${RESET}"
-  echo -e "  ${BOLD}16)${RESET}  📊  Storage Visualizer       ${DIM}bar/pie view of what's using space${RESET}"
-  echo -e "  ${BOLD} 0)${RESET}  ❌  Exit"
+
+  menu_group "🔍 ANALYZE (read-only)"
+  printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 1 "Full Audit" "scan everything"
+  printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 2 "Storage Visualizer" "bar/pie view of space"
+  printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 3 "Find Large Files" "files above a chosen size"
+  printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 4 "Cloud & Sync Audit" "OneDrive, iCloud, Dropbox · read-only"
+  printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 5 "AI Tools Audit" "IDEs, models, extensions · read-only"
+  printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 6 "App Support Deep Dive" "find hidden data · read-only"
+
+  menu_group "🧹 CLEAN"
+  printf "  ${BGREEN}${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 7 "🪄 Safe Cleanup Wizard" "guided, OS-safe"
+  printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 8 "Quick Clean" "one-confirm cache/log cleanup"
+  printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 9 "Interactive Clean" "choose item by item"
+  printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 10 "Time Machine & Backups" "snapshots, iOS backups"
+
+  menu_group "📦 MANAGE"
+  printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 11 "Applications" "browse, uninstall, move to USB"
+  printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 12 "VSCode Extensions" "extensions: browse, delete, backup"
+  printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 13 "LM Studio" "manage local AI models"
+  printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 14 "Ollama" "manage Ollama AI models"
+
+  menu_group "🧰 TOOLS"
+  printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 15 "Save Report to File" "export full audit"
+  printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 16 "Generate Feedback File" "diagnostic dump for Claude Code"
+
+  divider
+  printf "  ${BOLD}%2d)${RESET} %-28s\n" 0 "❌ Exit"
   divider
   echo -ne "\n  ${BCYAN}Choose an option: ${RESET}"
   read -r choice
   case "$choice" in
-    1) full_audit ;;       2) quick_clean ;;
-    3) interactive_clean ;;4) ai_tools_audit ;;
-    5) app_support_deep ;; 6) lmstudio_manager ;;
-    7) ollama_manager ;;   8) cloud_audit ;;
-    9) save_report ;;      10) find_large_files ;;
-    11) safe_wizard ;;     12) generate_feedback ;;
-    13) time_machine_manager ;; 14) applications_manager ;;
-    15) vscode_manager ;;
-    16) storage_visualizer ;;
-    0) echo -e "\n  ${BGREEN}Goodbye! 👋${RESET}\n"; exit 0 ;;
+    1) full_audit ;;       2) storage_visualizer ;;
+    3) find_large_files ;; 4) cloud_audit ;;
+    5) ai_tools_audit ;;   6) app_support_deep ;;
+    7) safe_wizard ;;      8) quick_clean ;;
+    9) interactive_clean ;;10) time_machine_manager ;;
+    11) applications_manager ;; 12) vscode_manager ;;
+    13) lmstudio_manager ;; 14) ollama_manager ;;
+    15) save_report ;;     16) generate_feedback ;;
+    0)
+      local free_now=$(df -h / | awk 'NR==2{print $4}')
+      echo -e "\n  ${BGREEN}Goodbye! 👋 Free space now: ${BYELLOW}${free_now}${RESET}\n"
+      exit 0
+      ;;
     *) warning "Invalid option"; sleep 1; main_menu ;;
   esac
 }
 
 # ══════════════════════════════════════════════════════════════
-#   ★ 10) SAFE CLEANUP WIZARD  (the new headline feature)
+#   ★ 7) SAFE CLEANUP WIZARD  (the headline feature)
 # ══════════════════════════════════════════════════════════════
 #
 #   Classifies everything into 3 tiers:
@@ -130,10 +148,14 @@ main_menu() {
 _wiz_protected() {
   local low=$(echo "$1" | tr '[:upper:]' '[:lower:]')
   case "$low" in
-    *onedrive*|*dropbox*|*googledrive*|*cloudstorage*|*"mobile documents"*|*clouddocs*) return 0 ;;
+    # Cloud/sync platforms: library & container paths
+    *onedrive*|*dropbox*|*"google drive"*|*googledrive*|*cloudstorage*|*"mobile documents"*|*clouddocs*) return 0 ;;
+    # Messaging apps
     *whatsapp*|*telegram*|*"group.net.whatsapp"*)                                        return 0 ;;
-    *"/library/mail"*|*com.apple.mail*|*keychain*|*"/library/photos"*|*photoslibrary*)   return 0 ;;
-    *"ubf8t346g9.office"*|*com.microsoft.outlook*|*com.microsoft.onedrive*)              return 0 ;;
+    # Apple system apps & services
+    *"/library/mail"*|*com.apple.mail*|*"/applications/mail.app"*|*keychain*|*"/library/photos"*|*"/applications/photos.app"*|*photoslibrary*) return 0 ;;
+    # Microsoft apps
+    *"ubf8t346g9.office"*|*com.microsoft.outlook*|*com.microsoft.onedrive*|*"outlook.app"*) return 0 ;;
   esac
   return 1
 }
@@ -245,15 +267,16 @@ safe_wizard() {
   echo -e "  ${BOLD}a)${RESET} ${BGREEN}Auto-clean ALL 🟢 safe items${RESET} ${DIM}(recommended, instant)${RESET}"
   echo -e "  ${BOLD}p)${RESET} Pick items one-by-one ${DIM}(includes 🟡 review items)${RESET}"
   echo -e "  ${BOLD}l)${RESET} List everything first ${DIM}(no deletion)${RESET}"
-  echo -e "  ${BOLD}q)${RESET} Back to menu"
-  echo -ne "\n  ${BCYAN}Choice [a/p/l/q]: ${RESET}"
+  echo -e "  ${BOLD}b)${RESET} Back to menu"
+  ask_choice "[a]uto  [p]ick  [l]ist  [b]ack"
   read -r wchoice
 
   case "$wchoice" in
     a|A) _wizard_auto_safe ;;
     p|P) _wizard_pick ;;
     l|L) _wizard_list; safe_wizard ;;
-    *)   main_menu ;;
+    b|B|q|Q) main_menu ;;
+    *) warning "Invalid option — try one of the keys shown"; sleep 1; safe_wizard ;;
   esac
 }
 
@@ -268,8 +291,7 @@ _wizard_list() {
     IFS='|' read -r tier kb path label note <<< "$c"
     [ "$tier" = "REVIEW" ] && printf "  %-9s %-34s ${DIM}%s${RESET}\n" "$(color_size $(human_kb $kb))" "$label" "$note"
   done
-  echo ""
-  echo -ne "  ${DIM}Press any key...${RESET}"; read -rn1
+  press_any_key
 }
 
 _wizard_auto_safe() {
@@ -303,14 +325,22 @@ _wizard_auto_safe() {
 
 _wizard_pick() {
   echo ""
-  info "For each item: y = delete, Enter = keep"
-  local freed=0
+  # Count total items to review
+  local total_items=0
+  for c in "${CANDIDATES[@]}"; do
+    IFS='|' read -r tier kb path label note <<< "$c"
+    [ -e "$path" ] && total_items=$((total_items+1))
+  done
+  info "$total_items items to review — y = delete, Enter = keep"
+
+  local freed=0 item_num=0
   for c in "${CANDIDATES[@]}"; do
     IFS='|' read -r tier kb path label note <<< "$c"
     [ ! -e "$path" ] && continue
+    item_num=$((item_num+1))
     local tag="🟢"; [ "$tier" = "REVIEW" ] && tag="🟡"
     echo ""
-    echo -e "  ${tag} ${BOLD}${label}${RESET}  ${BOLD}$(color_size $(human_kb $kb))${RESET}"
+    echo -e "  ${tag} [${item_num}/${total_items}] ${BOLD}${label}${RESET}  ${BOLD}$(color_size $(human_kb $kb))${RESET}"
     echo -e "     ${DIM}${note}${RESET}"
     echo -e "     ${DIM}${path}${RESET}"
     echo -ne "     ${BYELLOW}Delete? [y/N]: ${RESET}"
@@ -332,6 +362,8 @@ _wizard_pick() {
 
 # ══════════════════════════════════════════════════════════════
 #   1) FULL AUDIT
+# ══════════════════════════════════════════════════════════════
+#   Read-only deep scan with a recommendations summary at the end
 # ══════════════════════════════════════════════════════════════
 full_audit() {
   clear
@@ -383,40 +415,79 @@ full_audit() {
 }
 
 # ══════════════════════════════════════════════════════════════
-#   2) QUICK CLEAN
+#   8) QUICK CLEAN
+# ══════════════════════════════════════════════════════════════
+#   Deletes a fixed list of well-known safe cache/log paths
 # ══════════════════════════════════════════════════════════════
 quick_clean() {
   clear
   section "🧹 QUICK CLEAN — 100% Safe Items"
-  info "Removing caches, logs, updater downloads, and leftovers..."
+  info "Scanning caches, logs, updater downloads, and leftovers..."
   echo ""
-  freed_kb=0
-  _ci() {
+
+  # Pass 1: scan and build "kb|path|label" preview lines (same paths as before)
+  PREVIEW="" ; total_kb=0
+  _qc_scan() {
     local p="$1" l="$2"
-    if [ -e "$p" ]; then
-      local kb=$(du -sk "$p" 2>/dev/null|cut -f1); rm -rf "$p"
-      freed_kb=$((freed_kb+kb)); success "$l ${DIM}($(human_kb $kb))${RESET}"
-    fi
+    [ -e "$p" ] || return
+    local kb=$(du -sk "$p" 2>/dev/null|cut -f1); kb=${kb:-0}
+    PREVIEW="${PREVIEW}${kb}|${p}|${l}"$'\n'
+    total_kb=$((total_kb+kb))
   }
-  _ci ~/Library/Caches                                                "System Caches"
-  _ci ~/Library/Logs                                                  "Log Files"
-  _ci ~/Library/Application\ Support/Claude/Cache                    "Claude Cache"
-  _ci ~/Library/Application\ Support/Claude/Code\ Cache              "Claude Code Cache"
-  _ci ~/Library/Application\ Support/Claude/GPUCache                 "Claude GPU Cache"
-  _ci ~/Library/Application\ Support/Claude/vm_bundles               "Claude VM Bundles"
-  _ci ~/Library/Application\ Support/Code/Cache                      "VSCode Cache"
-  _ci ~/Library/Application\ Support/Code/CachedData                 "VSCode CachedData"
-  _ci ~/Library/Application\ Support/Code/logs                       "VSCode Logs"
+  _qc_scan ~/Library/Caches                                          "System Caches"
+  _qc_scan ~/Library/Logs                                            "Log Files"
+  _qc_scan ~/Library/Application\ Support/Claude/Cache               "Claude Cache"
+  _qc_scan ~/Library/Application\ Support/Claude/Code\ Cache         "Claude Code Cache"
+  _qc_scan ~/Library/Application\ Support/Claude/GPUCache            "Claude GPU Cache"
+  _qc_scan ~/Library/Application\ Support/Claude/vm_bundles          "Claude VM Bundles"
+  _qc_scan ~/Library/Application\ Support/Code/Cache                 "VSCode Cache"
+  _qc_scan ~/Library/Application\ Support/Code/CachedData            "VSCode CachedData"
+  _qc_scan ~/Library/Application\ Support/Code/logs                  "VSCode Logs"
   for d in ~/Library/Application\ Support/JetBrains/*/; do
-    [ -d "${d}caches" ] && _ci "${d}caches" "JetBrains $(basename "$d") caches"
-    [ -d "${d}log" ]    && _ci "${d}log"    "JetBrains $(basename "$d") logs"
+    [ -d "${d}caches" ] && _qc_scan "${d}caches" "JetBrains $(basename "$d") caches"
+    [ -d "${d}log" ]    && _qc_scan "${d}log"    "JetBrains $(basename "$d") logs"
   done
-  _ci ~/Library/Caches/JetBrains                                      "JetBrains System Cache"
-  _ci ~/Library/Application\ Support/Spotify/PersistentCache         "Spotify Cache"
+  _qc_scan ~/Library/Caches/JetBrains                                "JetBrains System Cache"
+  _qc_scan ~/Library/Application\ Support/Spotify/PersistentCache    "Spotify Cache"
   for tool in cursor windsurf trae codeium; do
-    _ci ~/.$tool "${tool} dot-folder"
+    _qc_scan ~/."$tool" "${tool} dot-folder"
   done
-  _ci ~/.Trash                                                        "Trash"
+  _qc_scan ~/.Trash                                                  "Trash"
+
+  # Check if anything was found
+  if [ "$total_kb" -eq 0 ]; then
+    success "Nothing to clean — already tidy! 🎉"
+    _back_to_menu
+    return
+  fi
+
+  # Show preview
+  section "Items to be deleted"
+  while IFS='|' read -r kb path label; do
+    [ -z "$kb" ] && continue
+    printf "  %-9s %s\n" "$(color_size $(human_kb "$kb"))" "$label"
+  done <<< "$PREVIEW"
+
+  # Single confirmation
+  echo ""; divider
+  if ! confirm "Delete all of the above ($(human_kb $total_kb))? This is safe — apps rebuild these automatically."; then
+    skipped "Nothing deleted"
+    _back_to_menu
+    return
+  fi
+
+  # Pass 2: Delete and report
+  echo ""
+  local freed_kb=0
+  while IFS='|' read -r kb path label; do
+    [ -z "$kb" ] && continue
+    if [ -e "$path" ]; then
+      rm -rf "$path"
+      success "$label ${DIM}($(human_kb $kb))${RESET}"
+      freed_kb=$((freed_kb+kb))
+    fi
+  done <<< "$PREVIEW"
+
   echo ""; divider
   echo -e "  ${BGREEN}✨ Freed approximately ${BYELLOW}${BOLD}$(human_kb $freed_kb)${RESET}"
   divider
@@ -424,7 +495,9 @@ quick_clean() {
 }
 
 # ══════════════════════════════════════════════════════════════
-#   3) INTERACTIVE CLEAN  (broad, includes apps/models)
+#   9) INTERACTIVE CLEAN
+# ══════════════════════════════════════════════════════════════
+#   Broader/more aggressive than the wizard—offers IDEs, LM Studio models, VSCode extensions one-by-one
 # ══════════════════════════════════════════════════════════════
 TOTAL_FREED=""
 safe_delete() {
@@ -442,18 +515,39 @@ interactive_clean() {
   section "🎯 INTERACTIVE CLEAN"
   info "Asks before each deletion. Includes apps & models (more aggressive than the wizard)."
   echo ""
+
+  local item_num=0
   if [ -d ~/.lmstudio/models ]; then
     echo -e "\n  ${BOLD}🧠 LM Studio Models:${RESET}"
-    for m in ~/.lmstudio/models/*/; do [ -d "$m" ] && safe_delete "$m" "LM Studio: $(basename "$m")"; done
+    for m in ~/.lmstudio/models/*/; do
+      [ -d "$m" ] || continue
+      item_num=$((item_num+1))
+      echo -ne "  [${item_num}] "
+      safe_delete "$m" "LM Studio: $(basename "$m")"
+    done
   fi
   if [ -d ~/Applications ]; then
     echo -e "\n  ${BOLD}🛠️  IDEs (~/Applications):${RESET}"
-    for a in ~/Applications/*.app; do [ -d "$a" ] && safe_delete "$a" "IDE: $(basename "$a")"; done
+    for a in ~/Applications/*.app; do
+      [ -d "$a" ] || continue
+      item_num=$((item_num+1))
+      echo -ne "  [${item_num}] "
+      safe_delete "$a" "IDE: $(basename "$a")"
+    done
   fi
-  safe_delete ~/.lmstudio/extensions "LM Studio Extensions"
+  if [ -d ~/.lmstudio/extensions ]; then
+    item_num=$((item_num+1))
+    echo -ne "  [${item_num}] "
+    safe_delete ~/.lmstudio/extensions "LM Studio Extensions"
+  fi
   if [ -d ~/.vscode/extensions ]; then
     echo -e "\n  ${BOLD}🔌 VSCode Extensions:${RESET}"
-    for e in ~/.vscode/extensions/*/; do [ -d "$e" ] && safe_delete "$e" "ext: $(basename "$e")"; done
+    for e in ~/.vscode/extensions/*/; do
+      [ -d "$e" ] || continue
+      item_num=$((item_num+1))
+      echo -ne "  [${item_num}] "
+      safe_delete "$e" "ext: $(basename "$e")"
+    done
   fi
   echo ""; divider
   if [ -n "$TOTAL_FREED" ]; then
@@ -463,7 +557,9 @@ interactive_clean() {
 }
 
 # ══════════════════════════════════════════════════════════════
-#   4) AI TOOLS AUDIT
+#   5) AI TOOLS AUDIT
+# ══════════════════════════════════════════════════════════════
+#   Lists AI IDE/tool footprints (read-only)
 # ══════════════════════════════════════════════════════════════
 ai_tools_audit() {
   clear
@@ -495,7 +591,9 @@ _ai_tools_list() {
 }
 
 # ══════════════════════════════════════════════════════════════
-#   5) APP SUPPORT DEEP DIVE
+#   6) APP SUPPORT DEEP DIVE
+# ══════════════════════════════════════════════════════════════
+#   Drill-down into ~/Library/Application Support, Group Containers, JetBrains (read-only)
 # ══════════════════════════════════════════════════════════════
 app_support_deep() {
   clear
@@ -512,7 +610,9 @@ app_support_deep() {
 }
 
 # ══════════════════════════════════════════════════════════════
-#   6) LM STUDIO MANAGER
+#   13) LM STUDIO MANAGER
+# ══════════════════════════════════════════════════════════════
+#   LM Studio model/extension inventory + optional deletion
 # ══════════════════════════════════════════════════════════════
 lmstudio_manager() {
   clear
@@ -530,13 +630,21 @@ lmstudio_manager() {
     while read s p; do printf "  %-10s %s\n" "$(color_size $s)" "$(basename "$p")"; done
   echo ""; info "Models re-download anytime from the catalog"
   if confirm "Start interactive model deletion?"; then
-    for m in ~/.lmstudio/models/*/; do [ -d "$m" ] && safe_delete "$m" "Model: $(basename "$m")"; done
+    local model_num=0
+    for m in ~/.lmstudio/models/*/; do
+      [ -d "$m" ] || continue
+      model_num=$((model_num+1))
+      echo -ne "  [${model_num}] "
+      safe_delete "$m" "Model: $(basename "$m")"
+    done
   fi
   _back_to_menu
 }
 
 # ══════════════════════════════════════════════════════════════
-#   7) OLLAMA MANAGER
+#   14) OLLAMA MANAGER
+# ══════════════════════════════════════════════════════════════
+#   Ollama model inventory + optional deletion
 # ══════════════════════════════════════════════════════════════
 ollama_manager() {
   clear
@@ -572,7 +680,9 @@ ollama_manager() {
 }
 
 # ══════════════════════════════════════════════════════════════
-#   8) CLOUD & SYNC AUDIT
+#   4) CLOUD & SYNC AUDIT
+# ══════════════════════════════════════════════════════════════
+#   Read-only, reports OneDrive/iCloud/Dropbox/WhatsApp/Telegram size — never offers to delete these
 # ══════════════════════════════════════════════════════════════
 cloud_audit() {
   clear
@@ -610,7 +720,9 @@ cloud_audit() {
 }
 
 # ══════════════════════════════════════════════════════════════
-#   8) SAVE REPORT
+#   15) SAVE REPORT TO FILE
+# ══════════════════════════════════════════════════════════════
+#   Dumps a plain-text snapshot to ~/storage_report_<timestamp>.txt
 # ══════════════════════════════════════════════════════════════
 save_report() {
   clear; section "📝 SAVING FULL REPORT"; info "→ $REPORT_FILE"; echo ""
@@ -636,7 +748,9 @@ save_report() {
 }
 
 # ══════════════════════════════════════════════════════════════
-#   9) FIND LARGE FILES
+#   3) FIND LARGE FILES
+# ══════════════════════════════════════════════════════════════
+#   Find-based search by minimum file size, user-supplied (read-only)
 # ══════════════════════════════════════════════════════════════
 find_large_files() {
   clear; section "🔍 FIND LARGE FILES"
@@ -653,7 +767,9 @@ find_large_files() {
 }
 
 # ══════════════════════════════════════════════════════════════
-#   16) STORAGE VISUALIZER  (read-only: bar / pie of top consumers)
+#   2) STORAGE VISUALIZER
+# ══════════════════════════════════════════════════════════════
+#   Read-only: bar / pie of top consumers
 # ══════════════════════════════════════════════════════════════
 # Builds a ranked "kb\tlabel" list (top 9 + a synthesized "Other" row)
 # so both renderers below share one dataset. Written to a temp file
@@ -766,13 +882,13 @@ storage_visualizer() {
     echo -e "  ${BOLD}1)${RESET} 📶  Bar chart   ${DIM}proportional treemap-style bars${RESET}"
     echo -e "  ${BOLD}2)${RESET} 🥧  Pie chart   ${DIM}ASCII circular breakdown${RESET}"
     echo -e "  ${BOLD}b)${RESET} ⬅️   Back to main menu"
-    echo -ne "\n  ${BCYAN}Choose: ${RESET}"
+    ask_choice "[1]  [2]  [b]ack"
     read -r vchoice
     case "$vchoice" in
-      1) clear; section "📶 BAR CHART — Top Space Consumers"; _viz_bar_chart "$data" "$total_kb"; echo ""; echo -ne "  ${DIM}Press any key to continue...${RESET}"; read -rn1 ;;
-      2) clear; section "🥧 PIE CHART — Top Space Consumers"; _viz_pie_chart "$data" "$total_kb"; echo -ne "  ${DIM}Press any key to continue...${RESET}"; read -rn1 ;;
-      b|B|0) loop=0 ;;
-      *) warning "Invalid option"; sleep 1 ;;
+      1) clear; section "📶 BAR CHART — Top Space Consumers"; _viz_bar_chart "$data" "$total_kb"; echo ""; press_any_key ;;
+      2) clear; section "🥧 PIE CHART — Top Space Consumers"; _viz_pie_chart "$data" "$total_kb"; press_any_key ;;
+      b|B|q|Q|0) loop=0 ;;
+      *) warning "Invalid option — try one of the keys shown"; sleep 1 ;;
     esac
   done
   _back_to_menu
@@ -797,7 +913,7 @@ _print_recommendations() {
 _back_to_menu() { echo ""; echo -ne "  ${DIM}Press any key to return to menu...${RESET}"; read -rn1; main_menu; }
 
 # ══════════════════════════════════════════════════════════════
-#   11) GENERATE FEEDBACK FILE FOR CLAUDE CODE
+#   16) GENERATE FEEDBACK FILE FOR CLAUDE CODE
 # ══════════════════════════════════════════════════════════════
 #
 #   Produces a single structured Markdown file engineered to be fed
@@ -1084,7 +1200,7 @@ generate_feedback() {
 }
 
 # ══════════════════════════════════════════════════════════════
-#  13) TIME MACHINE & BACKUPS MANAGER
+#  10) TIME MACHINE & BACKUPS MANAGER
 # ══════════════════════════════════════════════════════════════
 time_machine_manager() {
   clear
@@ -1126,7 +1242,7 @@ time_machine_manager() {
 }
 
 # ══════════════════════════════════════════════════════════════
-#  14) APPLICATIONS MANAGER
+#  11) APPLICATIONS MANAGER
 # ══════════════════════════════════════════════════════════════
 applications_manager() {
   clear
@@ -1164,14 +1280,14 @@ applications_manager() {
   echo ""
   local am_loop=1
   while [ "$am_loop" -eq 1 ]; do
-    echo -ne "\n  ${BCYAN}[d]elete  [m]ove to USB drive  [r]estore from USB  [q]uit: ${RESET}"
+    ask_choice "[d]elete  [m]ove to USB  [r]estore  [b]ack"
     read -r am_choice
     case "$am_choice" in
       d) _delete_apps_multi ;;
       m) _move_app_to_usb ;;
       r) _restore_app_from_usb ;;
-      q) am_loop=0 ;;
-      *) warning "Invalid option" ;;
+      b|B|q|Q) am_loop=0 ;;
+      *) warning "Invalid option — try one of the keys shown" ;;
     esac
   done
 
@@ -1184,16 +1300,29 @@ applications_manager() {
 _delete_apps_multi() {
   section "🗑️  Select apps to delete"
 
-  local -a app_paths
+  # Collect apps sorted by size descending
+  local app_list app_list_unsorted app
+  app_list_unsorted=$(find /Applications "$HOME/Applications" -maxdepth 1 -name "*.app" -type d ! -type l 2>/dev/null)
+  app_list=$(echo "$app_list_unsorted" | while read app; do
+    local kb; kb=$(du -sk "$app" 2>/dev/null | cut -f1)
+    echo "$kb	$app"
+  done | sort -rn | cut -f2)
+
+  local -a app_paths app_locked
   local idx=1
-  for app in /Applications/*.app "$HOME/Applications"/*.app; do
-    [ -d "$app" ] || continue
-    [ -L "$app" ] && continue
+  while IFS= read -r app; do
+    [ -z "$app" ] && continue
     app_paths[$idx]="$app"
     local kb; kb=$(du -sk "$app" 2>/dev/null | cut -f1)
-    printf "  %2d) %-10s %s\n" "$idx" "$(human_kb "${kb:-0}")" "$app"
+    if _wiz_protected "$app"; then
+      app_locked[$idx]=1
+      printf "  %2d) %-9s %s  ${BRED}🔒 PROTECTED${RESET}\n" "$idx" "$(color_size $(human_kb "${kb:-0}"))" "$(basename "$app")"
+    else
+      app_locked[$idx]=0
+      printf "  %2d) %-9s %s\n" "$idx" "$(color_size $(human_kb "${kb:-0}"))" "$(basename "$app")"
+    fi
     idx=$((idx+1))
-  done
+  done <<< "$app_list"
 
   if [ "$idx" -eq 1 ]; then
     info "No deletable apps found."
@@ -1210,21 +1339,36 @@ _delete_apps_multi() {
     warning "No valid selection"; return
   fi
 
+  # Filter out protected apps
+  local -a selectable
+  for i in "${idxs[@]}"; do
+    if [ "${app_locked[$i]:-0}" -eq 1 ]; then
+      danger "'$(basename "${app_paths[$i]}")' is protected (sync/messaging app) — skipped. Manage it from the app itself."
+    else
+      selectable+=("$i")
+    fi
+  done
+
+  if [ "${#selectable[@]}" -eq 0 ]; then
+    skipped "Nothing selectable was chosen"
+    return
+  fi
+
   echo ""; info "Selected for deletion:"
   local total_kb=0 i
-  for i in "${idxs[@]}"; do
+  for i in "${selectable[@]}"; do
     local p="${app_paths[$i]}"
     local kb; kb=$(du -sk "$p" 2>/dev/null | cut -f1); kb=${kb:-0}
     total_kb=$((total_kb+kb))
-    printf "  - %-10s %s\n" "$(human_kb "$kb")" "$p"
+    printf "  - %-9s %s\n" "$(color_size $(human_kb "$kb"))" "$(basename "$p")"
   done
 
   echo ""
-  if ! confirm "Delete these ${#idxs[@]} app(s), freeing ~$(human_kb "$total_kb")? This moves them to Trash-equivalent (permanent rm)."; then
+  if ! confirm "Delete these ${#selectable[@]} app(s), freeing ~$(human_kb "$total_kb")? This moves them to Trash-equivalent (permanent rm)."; then
     skipped "Cancelled"; return
   fi
 
-  for i in "${idxs[@]}"; do
+  for i in "${selectable[@]}"; do
     local p="${app_paths[$i]}"
     if [ -e "$p" ]; then
       rm -rf "$p"
@@ -1276,16 +1420,29 @@ _external_volumes() {
 _move_app_to_usb() {
   section "🔌 Move App to USB / External Drive"
 
-  local -a app_paths
+  # Collect apps sorted by size descending
+  local app_list app_list_unsorted app
+  app_list_unsorted=$(find /Applications "$HOME/Applications" -maxdepth 1 -name "*.app" -type d ! -type l 2>/dev/null)
+  app_list=$(echo "$app_list_unsorted" | while read app; do
+    local kb; kb=$(du -sk "$app" 2>/dev/null | cut -f1)
+    echo "$kb	$app"
+  done | sort -rn | cut -f2)
+
+  local -a app_paths app_locked
   local idx=1
-  for app in /Applications/*.app "$HOME/Applications"/*.app; do
-    [ -d "$app" ] || continue
-    [ -L "$app" ] && continue
+  while IFS= read -r app; do
+    [ -z "$app" ] && continue
     app_paths[$idx]="$app"
     local kb; kb=$(du -sk "$app" 2>/dev/null | cut -f1)
-    printf "  %2d) %-10s %s\n" "$idx" "$(human_kb "${kb:-0}")" "$app"
+    if _wiz_protected "$app"; then
+      app_locked[$idx]=1
+      printf "  %2d) %-9s %s  ${BRED}🔒 PROTECTED${RESET}\n" "$idx" "$(color_size $(human_kb "${kb:-0}"))" "$(basename "$app")"
+    else
+      app_locked[$idx]=0
+      printf "  %2d) %-9s %s\n" "$idx" "$(color_size $(human_kb "${kb:-0}"))" "$(basename "$app")"
+    fi
     idx=$((idx+1))
-  done
+  done <<< "$app_list"
 
   if [ "$idx" -eq 1 ]; then
     info "No movable apps found (already-moved apps are symlinks — use [r]estore)."
@@ -1300,6 +1457,21 @@ _move_app_to_usb() {
   sel_idxs=($(_parse_selection "$sel" $((idx-1))))
   if [ "${#sel_idxs[@]}" -eq 0 ]; then
     warning "No valid selection"; return
+  fi
+
+  # Filter out protected apps
+  local -a selectable
+  for i in "${sel_idxs[@]}"; do
+    if [ "${app_locked[$i]:-0}" -eq 1 ]; then
+      danger "'$(basename "${app_paths[$i]}")' is protected (sync/messaging app) — skipped. Manage it from the app itself."
+    else
+      selectable+=("$i")
+    fi
+  done
+
+  if [ "${#selectable[@]}" -eq 0 ]; then
+    skipped "Nothing selectable was chosen"
+    return
   fi
 
   local vols; vols=$(_external_volumes)
@@ -1330,11 +1502,11 @@ _move_app_to_usb() {
 
   echo ""; info "Selected to move:"
   local total_kb=0 i
-  for i in "${sel_idxs[@]}"; do
+  for i in "${selectable[@]}"; do
     local p="${app_paths[$i]}"
     local kb; kb=$(du -sk "$p" 2>/dev/null | cut -f1); kb=${kb:-0}
     total_kb=$((total_kb+kb))
-    printf "  - %-10s %s\n" "$(human_kb "$kb")" "$p"
+    printf "  - %-9s %s\n" "$(color_size $(human_kb "$kb"))" "$(basename "$p")"
   done
 
   if [ "$total_kb" -gt "$avail_kb" ]; then
@@ -1343,12 +1515,12 @@ _move_app_to_usb() {
   fi
 
   echo ""
-  if ! confirm "Move these ${#sel_idxs[@]} app(s) ($(human_kb "$total_kb")) to '$vol'? They will only launch while this drive is connected."; then
+  if ! confirm "Move these ${#selectable[@]} app(s) ($(human_kb "$total_kb")) to '$vol'? They will only launch while this drive is connected."; then
     skipped "Cancelled"; return
   fi
 
   mkdir -p "$dest_dir"
-  for i in "${sel_idxs[@]}"; do
+  for i in "${selectable[@]}"; do
     local app="${app_paths[$i]}"
     local app_name; app_name=$(basename "$app")
     local dest="$dest_dir/$app_name"
@@ -1453,7 +1625,7 @@ _restore_app_from_usb() {
 }
 
 # ══════════════════════════════════════════════════════════════
-#   15) VSCODE EXTENSION MANAGER
+#   12) VSCODE EXTENSION MANAGER
 # ══════════════════════════════════════════════════════════════
 vscode_manager() {
   local -a VARIANTS
@@ -1509,7 +1681,7 @@ vscode_manager() {
 
   local submenu_loop=1
   while [ "$submenu_loop" -eq 1 ]; do
-    echo -ne "\n  ${BCYAN}[d]elete  [b]ackup  [q]uit: ${RESET}"
+    ask_choice "[d]elete  [k] backup  [b]ack"
     read -r subchoice
     case "$subchoice" in
       d)
@@ -1527,7 +1699,7 @@ vscode_manager() {
           done
         fi
         ;;
-      b)
+      k|K)
         section "Backing up extensions"
         local backup_dir="$HOME/Desktop"
         local timestamp=$(date '+%Y%m%d_%H%M%S')
@@ -1553,11 +1725,11 @@ vscode_manager() {
           ((idx++))
         done
         ;;
-      q)
+      b|B|q|Q)
         submenu_loop=0
         ;;
       *)
-        warning "Invalid option"
+        warning "Invalid option — try one of the keys shown"
         ;;
     esac
   done
