@@ -1371,8 +1371,16 @@ _delete_apps_multi() {
   for i in "${selectable[@]}"; do
     local p="${app_paths[$i]}"
     if [ -e "$p" ]; then
-      rm -rf "$p"
-      success "Deleted $(basename "$p")"
+      if ! _app_removable "$p"; then
+        danger "'$(basename "$p")' was installed with admin rights (root-owned files) — delete it via Finder instead (asks for your admin password). Skipped."
+        continue
+      fi
+      rm -rf "$p" 2>/dev/null
+      if [ -e "$p" ]; then
+        danger "Could not fully delete '$(basename "$p")' (permission denied) — it may need Finder/admin removal."
+      else
+        success "Deleted $(basename "$p")"
+      fi
     fi
   done
 }
@@ -1395,6 +1403,17 @@ _parse_selection() {
       [ "$tok" -ge 1 ] && [ "$tok" -le "$max" ] && echo "$tok"
     fi
   done | sort -n | uniq
+}
+
+# ── Ownership check (used by app delete/move below) ────────────
+# Returns 0 (true) if the current user owns every file in the bundle,
+# i.e. rm -rf can fully remove it without admin rights. Apps installed
+# by a root installer (e.g. Microsoft Office) fail this and must not be
+# offered for delete/move — a partial rm would corrupt the app.
+_app_removable() {
+  local app="$1"
+  [ -n "$(find "$app" ! -user "$(id -un)" -print 2>/dev/null | head -1)" ] && return 1
+  return 0
 }
 
 # ── External volume discovery (used by move/restore below) ─────
@@ -1526,9 +1545,36 @@ _move_app_to_usb() {
     local dest="$dest_dir/$app_name"
     local app_kb; app_kb=$(du -sk "$app" 2>/dev/null | cut -f1); app_kb=${app_kb:-0}
 
+    local use_sudo=0
+    if ! _app_removable "$app"; then
+      warning "'$app_name' was installed with admin rights (root-owned files)."
+      if confirm "Complete the move with your admin password (sudo)?"; then
+        use_sudo=1
+      else
+        skipped "Skipped '$app_name'"
+        continue
+      fi
+    fi
+
     if [ -e "$dest" ]; then
-      warning "'$dest' already exists — skipping '$app_name'"
-      continue
+      local dest_size; dest_size=$(du -sk "$dest" 2>/dev/null | cut -f1); dest_size=${dest_size:-0}
+      warning "'$app_name' already has a copy on '$vol' ($(human_kb "$dest_size"), from a previous move)."
+      if confirm "Overwrite it with a fresh copy from the internal disk? (n = decide next)"; then
+        rm -rf "$dest"
+      elif [ "$dest_size" -gt 0 ] && confirm "Use the EXISTING external copy instead, and free the internal one? (it may be older)"; then
+        rm -rf "$app"
+        if [ -e "$app" ]; then
+          danger "Could not fully remove '$app_name' — restoring it from the external copy."
+          ditto "$dest" "$app" 2>/dev/null
+          continue
+        fi
+        ln -s "$dest" "$app"
+        success "Linked '$app_name' to existing external copy — freed $(human_kb "$app_kb") on internal disk"
+        continue
+      else
+        skipped "Skipped '$app_name'"
+        continue
+      fi
     fi
 
     echo -n "  Copying '$app_name' to external drive... "
@@ -1541,8 +1587,34 @@ _move_app_to_usb() {
       continue
     fi
 
-    rm -rf "$app"
-    ln -s "$dest" "$app"
+    if [ "$use_sudo" -eq 1 ]; then
+      info "Removing '$app_name' with admin rights (you may be asked for your password)..."
+      sudo rm -rf "$app"
+    else
+      rm -rf "$app" 2>/dev/null
+    fi
+    if [ -e "$app" ]; then
+      danger "Could not fully remove '$app_name' from the internal disk."
+      echo -n "  Repairing '$app_name' from the external copy... "
+      if { [ "$use_sudo" -eq 1 ] && sudo ditto "$dest" "$app" 2>/dev/null; } || ditto "$dest" "$app" 2>/dev/null; then
+        echo -e "${BGREEN}done${RESET}"
+        warning "'$app_name' was restored in place — nothing was moved."
+      else
+        echo -e "${BRED}failed${RESET}"
+        danger "'$app_name' may be damaged. A full copy is safe at: $dest — restore it with Finder or reinstall the app."
+      fi
+      continue
+    fi
+    local link_ok=0
+    if [ "$use_sudo" -eq 1 ]; then
+      sudo ln -s "$dest" "$app" 2>/dev/null && link_ok=1
+    else
+      ln -s "$dest" "$app" 2>/dev/null && link_ok=1
+    fi
+    if [ "$link_ok" -eq 0 ]; then
+      danger "Could not create the launcher link for '$app_name'. The app now lives only at: $dest"
+      continue
+    fi
     success "Moved '$app_name' — freed $(human_kb "$app_kb") on internal disk"
   done
 }
