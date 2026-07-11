@@ -755,6 +755,7 @@ storage_visualizer() {
   clear; section "📊 STORAGE VISUALIZER"
   info "Scanning home directory and /Applications for top consumers..."
   data=$(_viz_collect)
+  data=$(echo "$data" | tail -r)
   total_kb=$(echo "$data" | awk -F'\t' '{s+=$1} END{print s+0}')
 
   local loop=1
