@@ -89,8 +89,9 @@ main_menu() {
   echo -e "  ${BGREEN}${BOLD} 11) 🪄  SAFE CLEANUP WIZARD${RESET}    ${DIM}guided, OS-safe, pick what to free${RESET}"
   echo -e "  ${BCYAN}${BOLD} 12) 🧬  GENERATE FEEDBACK FILE${RESET} ${DIM}diagnostic dump for Claude Code${RESET}"
   echo -e "  ${BOLD}13)${RESET}  ⏱️   Time Machine & Backups  ${DIM}snapshots, iOS backups${RESET}"
-  echo -e "  ${BOLD}14)${RESET}  📱  Applications Manager     ${DIM}browse and uninstall apps${RESET}"
+  echo -e "  ${BOLD}14)${RESET}  📱  Applications Manager     ${DIM}browse, uninstall, or move apps to USB${RESET}"
   echo -e "  ${BOLD}15)${RESET}  🔌  VSCode & Variants        ${DIM}extensions: browse, delete, backup${RESET}"
+  echo -e "  ${BOLD}16)${RESET}  📊  Storage Visualizer       ${DIM}bar/pie view of what's using space${RESET}"
   echo -e "  ${BOLD} 0)${RESET}  ❌  Exit"
   divider
   echo -ne "\n  ${BCYAN}Choose an option: ${RESET}"
@@ -104,6 +105,7 @@ main_menu() {
     11) safe_wizard ;;     12) generate_feedback ;;
     13) time_machine_manager ;; 14) applications_manager ;;
     15) vscode_manager ;;
+    16) storage_visualizer ;;
     0) echo -e "\n  ${BGREEN}Goodbye! 👋${RESET}\n"; exit 0 ;;
     *) warning "Invalid option"; sleep 1; main_menu ;;
   esac
@@ -651,6 +653,131 @@ find_large_files() {
 }
 
 # ══════════════════════════════════════════════════════════════
+#   16) STORAGE VISUALIZER  (read-only: bar / pie of top consumers)
+# ══════════════════════════════════════════════════════════════
+# Builds a ranked "kb\tlabel" list (top 9 + a synthesized "Other" row)
+# so both renderers below share one dataset. Written to a temp file
+# since Bash 3.2 has no associative arrays.
+_viz_collect() {
+  local tmp; tmp=$(mktemp)
+  { du -sk ~/* ~/.[^.]* 2>/dev/null; [ -d /Applications ] && du -sk /Applications 2>/dev/null; } | \
+    awk -F'\t' '{n=split($2,parts,"/"); print $1"\t"parts[n]}' | sort -rn > "$tmp"
+
+  local total_kb; total_kb=$(awk -F'\t' '{s+=$1} END{print s+0}' "$tmp")
+  awk -F'\t' -v total="$total_kb" '
+    NR<=9 { print; kept+=$1; next }
+    { other+=$1 }
+    END { if (other>0) print other"\tOther" }
+  ' "$tmp"
+  rm -f "$tmp"
+}
+
+_viz_bar_chart() {
+  local data="$1" total_kb="$2"
+  local max_width=40
+  echo "$data" | while IFS=$'\t' read -r kb label; do
+    [ -z "$kb" ] && continue
+    local pct bar_len i bar=""
+    pct=$(awk -v k="$kb" -v t="$total_kb" 'BEGIN{ if(t>0) printf "%.1f", k*100/t; else print "0.0" }')
+    bar_len=$(awk -v k="$kb" -v t="$total_kb" -v w="$max_width" 'BEGIN{ if(t>0){v=k*w/t; if(v<1 && k>0)v=1; printf "%d", v} else print 0 }')
+    for ((i=0;i<bar_len;i++)); do bar+="█"; done
+    for ((i=bar_len;i<max_width;i++)); do bar+="░"; done
+    local sizecolor="${DIM}"
+    if   awk -v p="$pct" 'BEGIN{exit !(p>=20)}'; then sizecolor="${BRED}${BOLD}"
+    elif awk -v p="$pct" 'BEGIN{exit !(p>=8)}';  then sizecolor="${BYELLOW}"
+    else sizecolor="${CYAN}"; fi
+    printf "  %-22.22s ${sizecolor}%-9s${RESET} ${sizecolor}%s${RESET} %5s%%\n" "$label" "$(human_kb "$kb")" "$bar" "$pct"
+  done
+}
+
+_viz_pie_chart() {
+  local data="$1" total_kb="$2"
+  local palette_chars=('█' '▓' '▒' '░' '●' '◆' '▲' '■' '◇' '○')
+  local palette_colors=("${BRED}" "${BYELLOW}" "${BGREEN}" "${BCYAN}" "${BMAGENTA}" "${BBLUE}" "${RED}" "${YELLOW}" "${GREEN}" "${CYAN}")
+
+  local labels=() kbs=() pcts=()
+  local idx=0 cum=0
+  while IFS=$'\t' read -r kb label; do
+    [ -z "$kb" ] && continue
+    labels[$idx]="$label"; kbs[$idx]="$kb"
+    idx=$((idx+1))
+  done <<< "$data"
+  local n=$idx
+
+  # Cumulative percentage boundaries, computed once in one awk pass.
+  local bounds; bounds=$(
+    printf '%s\n' "${kbs[@]}" | awk -v t="$total_kb" '
+      { c+=$1; if(t>0) printf "%.4f\n", c*100/t; else print "0" }
+    '
+  )
+  local i=0
+  while read -r b; do pcts[$i]="$b"; i=$((i+1)); done <<< "$bounds"
+
+  echo ""
+  local rows=14 cols=28
+  for ((y=0; y<rows; y++)); do
+    local line="  "
+    for ((x=0; x<cols; x++)); do
+      local ch=$(awk -v x="$x" -v y="$y" -v cols="$cols" -v rows="$rows" -v n="$n" -v boundstr="$(printf '%s ' "${pcts[@]}")" '
+        BEGIN{
+          pi=3.14159265358979
+          cx=(cols-1)/2.0; cy=(rows-1)/2.0
+          dx=(x-cx)/ (cols/2.0); dy=(y-cy)/(rows/2.0)
+          dist=sqrt(dx*dx+dy*dy)
+          if (dist>1.0) { print " "; exit }
+          ang=atan2(-dy,dx)*180/pi
+          if (ang<0) ang+=360
+          pct = ang/360*100
+          split(boundstr, b, " ")
+          for (k=1;k<=n;k++) { if (pct<=b[k]) { print k; exit } }
+          print n
+        }
+      ')
+      if [ "$ch" = " " ]; then
+        line+=" "
+      else
+        local slot=$((ch-1))
+        line+="${palette_colors[$slot]}${palette_chars[$slot]}${RESET}"
+      fi
+    done
+    echo -e "$line"
+  done
+  echo ""
+  for ((i=0; i<n; i++)); do
+    local pct_disp
+    pct_disp=$(awk -v k="${kbs[$i]}" -v t="$total_kb" 'BEGIN{ if(t>0) printf "%.1f", k*100/t; else print "0.0" }')
+    printf "  ${palette_colors[$i]}%s${RESET} %-22.22s %-9s %5s%%\n" "${palette_chars[$i]}" "${labels[$i]}" "$(human_kb "${kbs[$i]}")" "$pct_disp"
+  done
+}
+
+storage_visualizer() {
+  local data total_kb
+  clear; section "📊 STORAGE VISUALIZER"
+  info "Scanning home directory and /Applications for top consumers..."
+  data=$(_viz_collect)
+  total_kb=$(echo "$data" | awk -F'\t' '{s+=$1} END{print s+0}')
+
+  local loop=1
+  while [ "$loop" -eq 1 ]; do
+    clear; section "📊 STORAGE VISUALIZER"
+    echo -e "  ${BOLD}Total scanned:${RESET} $(human_kb "$total_kb")"
+    echo ""
+    echo -e "  ${BOLD}1)${RESET} 📶  Bar chart   ${DIM}proportional treemap-style bars${RESET}"
+    echo -e "  ${BOLD}2)${RESET} 🥧  Pie chart   ${DIM}ASCII circular breakdown${RESET}"
+    echo -e "  ${BOLD}b)${RESET} ⬅️   Back to main menu"
+    echo -ne "\n  ${BCYAN}Choose: ${RESET}"
+    read -r vchoice
+    case "$vchoice" in
+      1) clear; section "📶 BAR CHART — Top Space Consumers"; _viz_bar_chart "$data" "$total_kb"; echo ""; echo -ne "  ${DIM}Press any key to continue...${RESET}"; read -rn1 ;;
+      2) clear; section "🥧 PIE CHART — Top Space Consumers"; _viz_pie_chart "$data" "$total_kb"; echo -ne "  ${DIM}Press any key to continue...${RESET}"; read -rn1 ;;
+      b|B|0) loop=0 ;;
+      *) warning "Invalid option"; sleep 1 ;;
+    esac
+  done
+  _back_to_menu
+}
+
+# ══════════════════════════════════════════════════════════════
 #   RECOMMENDATIONS ENGINE
 # ══════════════════════════════════════════════════════════════
 _print_recommendations() {
@@ -1034,14 +1161,294 @@ applications_manager() {
   [ -d "$HOME/Applications" ] && info "Total ~/Applications: $(du -sh "$HOME/Applications" 2>/dev/null | cut -f1)"
 
   echo ""
-  if confirm "Start interactive app deletion?"; then
-    section "Select apps to delete"
-    for app in /Applications/*.app "$HOME/Applications"/*.app; do
-      [ -d "$app" ] && safe_delete "$app" "App: $(basename "$app")"
-    done
-  fi
+  local am_loop=1
+  while [ "$am_loop" -eq 1 ]; do
+    echo -ne "\n  ${BCYAN}[d]elete  [m]ove to USB drive  [r]estore from USB  [q]uit: ${RESET}"
+    read -r am_choice
+    case "$am_choice" in
+      d) _delete_apps_multi ;;
+      m) _move_app_to_usb ;;
+      r) _restore_app_from_usb ;;
+      q) am_loop=0 ;;
+      *) warning "Invalid option" ;;
+    esac
+  done
 
   _back_to_menu
+}
+
+# ══════════════════════════════════════════════════════════════
+#   DELETE ONE OR MORE APPS (numbered multi-select)
+# ══════════════════════════════════════════════════════════════
+_delete_apps_multi() {
+  section "🗑️  Select apps to delete"
+
+  local -a app_paths
+  local idx=1
+  for app in /Applications/*.app "$HOME/Applications"/*.app; do
+    [ -d "$app" ] || continue
+    [ -L "$app" ] && continue
+    app_paths[$idx]="$app"
+    local kb; kb=$(du -sk "$app" 2>/dev/null | cut -f1)
+    printf "  %2d) %-10s %s\n" "$idx" "$(human_kb "${kb:-0}")" "$app"
+    idx=$((idx+1))
+  done
+
+  if [ "$idx" -eq 1 ]; then
+    info "No deletable apps found."
+    return
+  fi
+
+  echo -ne "\n  ${BCYAN}App number(s) to delete ${DIM}(e.g. 2 or 1,3,5-7)${RESET}${BCYAN}, blank to cancel: ${RESET}"
+  read -r sel
+  [ -z "$sel" ] && { skipped "Cancelled"; return; }
+
+  local -a idxs
+  idxs=($(_parse_selection "$sel" $((idx-1))))
+  if [ "${#idxs[@]}" -eq 0 ]; then
+    warning "No valid selection"; return
+  fi
+
+  echo ""; info "Selected for deletion:"
+  local total_kb=0 i
+  for i in "${idxs[@]}"; do
+    local p="${app_paths[$i]}"
+    local kb; kb=$(du -sk "$p" 2>/dev/null | cut -f1); kb=${kb:-0}
+    total_kb=$((total_kb+kb))
+    printf "  - %-10s %s\n" "$(human_kb "$kb")" "$p"
+  done
+
+  echo ""
+  if ! confirm "Delete these ${#idxs[@]} app(s), freeing ~$(human_kb "$total_kb")? This moves them to Trash-equivalent (permanent rm)."; then
+    skipped "Cancelled"; return
+  fi
+
+  for i in "${idxs[@]}"; do
+    local p="${app_paths[$i]}"
+    if [ -e "$p" ]; then
+      rm -rf "$p"
+      success "Deleted $(basename "$p")"
+    fi
+  done
+}
+
+# ── Selection parsing (used by app delete/move/restore below) ──
+# Expands "2,4,7-9" into sorted, deduped, in-range line-per-index output.
+_parse_selection() {
+  local input="$1" max="$2"
+  echo "$input" | tr ',' '\n' | while read -r tok; do
+    tok=$(echo "$tok" | tr -d ' ')
+    [ -z "$tok" ] && continue
+    if echo "$tok" | grep -qE '^[0-9]+-[0-9]+$'; then
+      local a="${tok%-*}" b="${tok#*-}"
+      [ "$a" -gt "$b" ] && { local t="$a"; a="$b"; b="$t"; }
+      local n
+      for ((n=a; n<=b; n++)); do
+        [ "$n" -ge 1 ] && [ "$n" -le "$max" ] && echo "$n"
+      done
+    elif echo "$tok" | grep -qE '^[0-9]+$'; then
+      [ "$tok" -ge 1 ] && [ "$tok" -le "$max" ] && echo "$tok"
+    fi
+  done | sort -n | uniq
+}
+
+# ── External volume discovery (used by move/restore below) ─────
+# Lists mounted /Volumes/* entries whose filesystem device id differs
+# from "/", i.e. excludes the boot volume (robust across APFS
+# firmlinks, unlike matching on volume name).
+_external_volumes() {
+  local boot_dev; boot_dev=$(stat -f %d / 2>/dev/null)
+  for v in /Volumes/*/; do
+    [ -d "$v" ] || continue
+    local vol_dev; vol_dev=$(stat -f %d "$v" 2>/dev/null)
+    [ -z "$vol_dev" ] && continue
+    [ "$vol_dev" = "$boot_dev" ] && continue
+    local name; name=$(basename "$v")
+    local avail_kb; avail_kb=$(df -k "$v" 2>/dev/null | awk 'NR==2{print $4}')
+    printf "%s\t%s\n" "$name" "${avail_kb:-0}"
+  done
+}
+
+# ══════════════════════════════════════════════════════════════
+#   MOVE APP TO USB DRIVE  (symlink trick, ditto-verified)
+# ══════════════════════════════════════════════════════════════
+_move_app_to_usb() {
+  section "🔌 Move App to USB / External Drive"
+
+  local -a app_paths
+  local idx=1
+  for app in /Applications/*.app "$HOME/Applications"/*.app; do
+    [ -d "$app" ] || continue
+    [ -L "$app" ] && continue
+    app_paths[$idx]="$app"
+    local kb; kb=$(du -sk "$app" 2>/dev/null | cut -f1)
+    printf "  %2d) %-10s %s\n" "$idx" "$(human_kb "${kb:-0}")" "$app"
+    idx=$((idx+1))
+  done
+
+  if [ "$idx" -eq 1 ]; then
+    info "No movable apps found (already-moved apps are symlinks — use [r]estore)."
+    return
+  fi
+
+  echo -ne "\n  ${BCYAN}App number(s) to move ${DIM}(e.g. 2 or 1,3,5-7)${RESET}${BCYAN}, blank to cancel: ${RESET}"
+  read -r sel
+  [ -z "$sel" ] && { skipped "Cancelled"; return; }
+
+  local -a sel_idxs
+  sel_idxs=($(_parse_selection "$sel" $((idx-1))))
+  if [ "${#sel_idxs[@]}" -eq 0 ]; then
+    warning "No valid selection"; return
+  fi
+
+  local vols; vols=$(_external_volumes)
+  if [ -z "$vols" ]; then
+    warning "No external/USB drives are mounted. Connect one and try again."
+    return
+  fi
+
+  echo ""; info "Mounted external volumes:"
+  local -a vol_names
+  idx=1
+  while IFS=$'\t' read -r vname vavail; do
+    vol_names[$idx]="$vname"
+    printf "  %2d) %-20s %s free\n" "$idx" "$vname" "$(human_kb "$vavail")"
+    idx=$((idx+1))
+  done <<< "$vols"
+
+  echo -ne "\n  ${BCYAN}Destination volume number (blank to cancel): ${RESET}"
+  read -r vsel
+  [ -z "$vsel" ] && { skipped "Cancelled"; return; }
+  local vol="${vol_names[$vsel]}"
+  if [ -z "$vol" ] || [ ! -d "/Volumes/$vol" ]; then
+    warning "Invalid selection"; return
+  fi
+
+  local dest_dir="/Volumes/$vol/AppsOnExternal"
+  local avail_kb; avail_kb=$(df -k "/Volumes/$vol" 2>/dev/null | awk 'NR==2{print $4}'); avail_kb=${avail_kb:-0}
+
+  echo ""; info "Selected to move:"
+  local total_kb=0 i
+  for i in "${sel_idxs[@]}"; do
+    local p="${app_paths[$i]}"
+    local kb; kb=$(du -sk "$p" 2>/dev/null | cut -f1); kb=${kb:-0}
+    total_kb=$((total_kb+kb))
+    printf "  - %-10s %s\n" "$(human_kb "$kb")" "$p"
+  done
+
+  if [ "$total_kb" -gt "$avail_kb" ]; then
+    danger "Not enough free space on '$vol' ($(human_kb "$avail_kb") free, need $(human_kb "$total_kb") total)"
+    return
+  fi
+
+  echo ""
+  if ! confirm "Move these ${#sel_idxs[@]} app(s) ($(human_kb "$total_kb")) to '$vol'? They will only launch while this drive is connected."; then
+    skipped "Cancelled"; return
+  fi
+
+  mkdir -p "$dest_dir"
+  for i in "${sel_idxs[@]}"; do
+    local app="${app_paths[$i]}"
+    local app_name; app_name=$(basename "$app")
+    local dest="$dest_dir/$app_name"
+    local app_kb; app_kb=$(du -sk "$app" 2>/dev/null | cut -f1); app_kb=${app_kb:-0}
+
+    if [ -e "$dest" ]; then
+      warning "'$dest' already exists — skipping '$app_name'"
+      continue
+    fi
+
+    echo -n "  Copying '$app_name' to external drive... "
+    if ditto "$app" "$dest" 2>/dev/null && [ -d "$dest" ] && [ -n "$(ls -A "$dest" 2>/dev/null)" ]; then
+      echo -e "${BGREEN}done${RESET}"
+    else
+      echo -e "${BRED}failed${RESET}"
+      danger "Copy failed or destination is empty — '$app_name' left untouched."
+      rm -rf "$dest" 2>/dev/null
+      continue
+    fi
+
+    rm -rf "$app"
+    ln -s "$dest" "$app"
+    success "Moved '$app_name' — freed $(human_kb "$app_kb") on internal disk"
+  done
+}
+
+# ══════════════════════════════════════════════════════════════
+#   RESTORE APP FROM USB DRIVE
+# ══════════════════════════════════════════════════════════════
+_restore_app_from_usb() {
+  section "🔄 Restore App from USB / External Drive"
+
+  local -a link_paths
+  local -a link_targets
+  local idx=1
+  for app in /Applications/*.app "$HOME/Applications"/*.app; do
+    [ -L "$app" ] || continue
+    local target; target=$(readlink "$app")
+    link_paths[$idx]="$app"
+    link_targets[$idx]="$target"
+    local status="${BGREEN}connected${RESET}"
+    [ -e "$target" ] || status="${BRED}drive not connected${RESET}"
+    printf "  %2d) %-40s -> %s [%b]\n" "$idx" "$(basename "$app")" "$target" "$status"
+    idx=$((idx+1))
+  done
+
+  if [ "$idx" -eq 1 ]; then
+    info "No externally-moved apps found."
+    return
+  fi
+
+  echo -ne "\n  ${BCYAN}App number(s) to restore ${DIM}(e.g. 2 or 1,3,5-7)${RESET}${BCYAN}, blank to cancel: ${RESET}"
+  read -r sel
+  [ -z "$sel" ] && { skipped "Cancelled"; return; }
+
+  local -a sel_idxs
+  sel_idxs=($(_parse_selection "$sel" $((idx-1))))
+  if [ "${#sel_idxs[@]}" -eq 0 ]; then
+    warning "No valid selection"; return
+  fi
+
+  echo ""; info "Selected to restore:"
+  local i
+  for i in "${sel_idxs[@]}"; do
+    printf "  - %s\n" "$(basename "${link_paths[$i]}")"
+  done
+
+  echo ""
+  if ! confirm "Restore these ${#sel_idxs[@]} app(s) back to internal disk?"; then
+    skipped "Cancelled"; return
+  fi
+
+  for i in "${sel_idxs[@]}"; do
+    local app="${link_paths[$i]}"
+    local target="${link_targets[$i]}"
+    local app_name; app_name=$(basename "$app")
+
+    if [ ! -e "$target" ]; then
+      danger "Target '$target' is not reachable — skipping '$app_name'"
+      continue
+    fi
+
+    local restore_path="$app"
+    rm -f "$app"
+    echo -n "  Copying '$app_name' back to internal disk... "
+    if ditto "$target" "$restore_path" 2>/dev/null && [ -d "$restore_path" ] && [ -n "$(ls -A "$restore_path" 2>/dev/null)" ]; then
+      echo -e "${BGREEN}done${RESET}"
+    else
+      echo -e "${BRED}failed${RESET}"
+      danger "Restore failed for '$app_name' — re-linking to external copy so it stays usable."
+      rm -rf "$restore_path" 2>/dev/null
+      ln -s "$target" "$restore_path"
+      continue
+    fi
+
+    success "Restored '$app_name' to internal disk"
+    if confirm "Delete the external copy at '$target'?"; then
+      rm -rf "$target"
+      success "Removed external copy"
+    fi
+  done
 }
 
 # ══════════════════════════════════════════════════════════════
