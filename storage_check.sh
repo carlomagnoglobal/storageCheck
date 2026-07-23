@@ -1280,12 +1280,13 @@ applications_manager() {
   echo ""
   local am_loop=1
   while [ "$am_loop" -eq 1 ]; do
-    ask_choice "[d]elete  [m]ove to USB  [r]estore  [b]ack"
+    ask_choice "[d]elete  [m]ove to USB  [r]estore  [x]relink missing  [b]ack"
     read -r am_choice
     case "$am_choice" in
       d) _delete_apps_multi ;;
       m) _move_app_to_usb ;;
       r) _restore_app_from_usb ;;
+      x) _relink_missing_apps ;;
       b|B|q|Q) am_loop=0 ;;
       *) warning "Invalid option — try one of the keys shown" ;;
     esac
@@ -1694,6 +1695,101 @@ _restore_app_from_usb() {
       success "Removed external copy"
     fi
   done
+}
+
+# ══════════════════════════════════════════════════════════════
+#   RELINK APPS WITH A MISSING LAUNCHER LINK
+#   (bundle still on external AppsOnExternal, but the symlink in
+#    /Applications or ~/Applications is gone — recreate it without
+#    copying/moving any bytes)
+# ══════════════════════════════════════════════════════════════
+_relink_missing_apps() {
+  section "🔗 Relink Apps with Missing Launcher"
+
+  local vols; vols=$(_external_volumes)
+  if [ -z "$vols" ]; then
+    warning "No external/USB drives are mounted. Connect one and try again."
+    return
+  fi
+
+  local -a cand_bundle cand_name
+  local idx=1
+  local vname vavail
+  while IFS=$'\t' read -r vname vavail; do
+    local ext_dir="/Volumes/$vname/AppsOnExternal"
+    [ -d "$ext_dir" ] || continue
+    local bundle
+    for bundle in "$ext_dir"/*.app; do
+      [ -d "$bundle" ] || continue
+      local name; name=$(basename "$bundle")
+      local sys_target="/Applications/$name"
+      local usr_target="$HOME/Applications/$name"
+      if [ -e "$sys_target" ] || [ -L "$sys_target" ] || [ -e "$usr_target" ] || [ -L "$usr_target" ]; then
+        continue
+      fi
+      cand_bundle[$idx]="$bundle"
+      cand_name[$idx]="$name"
+      idx=$((idx+1))
+    done
+  done <<< "$vols"
+
+  if [ "$idx" -eq 1 ]; then
+    info "No missing links found — every external app already has a launcher."
+    return
+  fi
+
+  info "Found $((idx-1)) app(s) on external drive(s) with no launcher in /Applications or ~/Applications:"
+  local i
+  for ((i=1; i<idx; i++)); do
+    local kb; kb=$(du -sk "${cand_bundle[$i]}" 2>/dev/null | cut -f1); kb=${kb:-0}
+    printf "  %2d) %-9s %-30s ${DIM}%s${RESET}\n" "$i" "$(color_size $(human_kb "$kb"))" "${cand_name[$i]}" "${cand_bundle[$i]}"
+  done
+
+  echo -ne "\n  ${BCYAN}App number(s) to relink ${DIM}(e.g. 2 or 1,3,5-7)${RESET}${BCYAN}, blank to cancel: ${RESET}"
+  read -r sel
+  [ -z "$sel" ] && { skipped "Cancelled"; return; }
+
+  local -a sel_idxs
+  sel_idxs=($(_parse_selection "$sel" $((idx-1))))
+  if [ "${#sel_idxs[@]}" -eq 0 ]; then
+    warning "No valid selection"; return
+  fi
+
+  echo ""
+  echo -ne "  ${BCYAN}Link into [a] /Applications (system-wide, needs admin) or [u] ~/Applications (user)? ${RESET}"
+  read -r loc_choice
+  local dest_base="/Applications"
+  case "$loc_choice" in
+    u|U) dest_base="$HOME/Applications" ;;
+    *) dest_base="/Applications" ;;
+  esac
+  mkdir -p "$dest_base" 2>/dev/null
+
+  local relinked=0
+  for i in "${sel_idxs[@]}"; do
+    local bundle="${cand_bundle[$i]}" name="${cand_name[$i]}"
+    local target="$dest_base/$name"
+
+    if _wiz_protected "$target" || _wiz_protected "$bundle"; then
+      danger "'$name' is protected — skipped."
+      continue
+    fi
+    if [ -e "$target" ] || [ -L "$target" ]; then
+      warning "'$name' already exists at '$target' — skipped."
+      continue
+    fi
+
+    ln -s "$bundle" "$target" 2>/dev/null
+    if [ -L "$target" ]; then
+      success "Relinked '$name' -> $bundle"
+      relinked=$((relinked+1))
+    else
+      danger "Could not create the launcher link for '$name' at '$target'."
+    fi
+  done
+
+  echo ""
+  info "$relinked app(s) relinked."
 }
 
 # ══════════════════════════════════════════════════════════════

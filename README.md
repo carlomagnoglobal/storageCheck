@@ -1,5 +1,9 @@
 # storageCheck
 
+![Platform](https://img.shields.io/badge/platform-macOS-black?logo=apple&logoColor=white)
+![Bash](https://img.shields.io/badge/bash-3.2%2B-4EAA25?logo=gnu-bash&logoColor=white)
+![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
+
 An interactive terminal tool for auditing Mac disk usage with a **Safe Cleanup Wizard** that intelligently identifies files safe to delete without touching system files, installed apps, or personal data.
 
 ## Features
