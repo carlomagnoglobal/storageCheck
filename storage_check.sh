@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║      MAC STORAGE MANAGER v3.2 — by Claude                    ║
+# ║      MAC STORAGE MANAGER v3.5 — by Claude                    ║
 # ║      Audit · Analyze · Clean · Report · Wizard · Feedback    ║
 # ╚══════════════════════════════════════════════════════════════╝
 
@@ -39,6 +39,33 @@ human_kb() {
   }'
 }
 
+# Fills DISK_PCT / DISK_USED / DISK_FREE / DISK_TOTAL / DISK_COLOR from df.
+_disk_stats() {
+  DISK_PCT=$(df / | awk 'NR==2{gsub(/%/,"",$5); print $5}')
+  DISK_TOTAL=$(df -h / | awk 'NR==2{print $2}')
+  DISK_USED=$(df -h / | awk 'NR==2{print $3}')
+  DISK_FREE=$(df -h / | awk 'NR==2{print $4}')
+  if   [ "$DISK_PCT" -ge 80 ]; then DISK_COLOR="${BRED}"
+  elif [ "$DISK_PCT" -ge 60 ]; then DISK_COLOR="${BYELLOW}"
+  else DISK_COLOR="${BGREEN}"; fi
+}
+
+# Echoes a plain █/░ bar of $1 characters for the current DISK_PCT.
+_disk_bar_str() {
+  local len=${1:-40} i bar=""
+  local filled=$(( DISK_PCT * len / 100 )); local empty=$(( len - filled ))
+  for ((i=0;i<filled;i++)); do bar+="█"; done
+  for ((i=0;i<empty;i++)); do bar+="░"; done
+  echo "$bar"
+}
+
+# Colored size from KB, padded to 8 visible columns (ANSI-safe alignment).
+_size_cell() {
+  local s; s=$(human_kb "${1:-0}")
+  local n=$(( 8 - ${#s} )); [ "$n" -lt 1 ] && n=1
+  printf "%s%*s" "$(color_size "$s")" "$n" ""
+}
+
 confirm() {
   echo -ne "\n  ${BYELLOW}❓ $1 [y/N]: ${RESET}"
   read -r answer
@@ -64,21 +91,9 @@ main_menu() {
   echo -e "${BMAGENTA}╚══════════════════════════════════════════════════════════╝${RESET}"
   echo ""
 
-  local used_pct=$(df / | awk 'NR==2{gsub(/%/,"",$5); print $5}')
-  local total=$(df -h / | awk 'NR==2{print $2}')
-  local used=$(df -h / | awk 'NR==2{print $3}')
-  local avail=$(df -h / | awk 'NR==2{print $4}')
-  local bar_len=40
-  local filled=$(( used_pct * bar_len / 100 )); local empty=$(( bar_len - filled ))
-  local bar=""
-  for ((i=0;i<filled;i++)); do bar+="█"; done
-  for ((i=0;i<empty;i++)); do bar+="░"; done
-  if   [ "$used_pct" -ge 80 ]; then bc="${BRED}"
-  elif [ "$used_pct" -ge 60 ]; then bc="${BYELLOW}"
-  else bc="${BGREEN}"; fi
-
-  echo -e "  ${BOLD}Disk:${RESET} ${bc}[${bar}] ${used_pct}%${RESET}"
-  echo -e "  ${DIM}Used: ${used}  |  Free: ${avail}  |  Total: ${total}${RESET}"
+  _disk_stats
+  echo -e "  ${BOLD}Disk:${RESET} ${DISK_COLOR}[$(_disk_bar_str 40)] ${DISK_PCT}%${RESET}"
+  echo -e "  ${DIM}Used: ${DISK_USED}  |  Free: ${DISK_FREE}  |  Total: ${DISK_TOTAL}${RESET}"
   echo ""
   divider
 
@@ -162,7 +177,7 @@ _wiz_protected() {
 
 safe_wizard() {
   clear
-  echo -e "${BGREEN}${BOLD}🪄  SAFE CLEANUP WIZARD${RESET}  ${DIM}(v3.2 pattern engine)${RESET}"
+  echo -e "${BGREEN}${BOLD}🪄  SAFE CLEANUP WIZARD${RESET}  ${DIM}(v3.5 pattern engine)${RESET}"
   divider
   echo -e "  Offers only items that are ${BGREEN}safe by design${RESET}: caches, logs, temp & re-downloadables."
   echo -e "  It ${BRED}never${RESET} touches macOS system data, cloud sync, chats, mail, or your files."
@@ -982,7 +997,7 @@ generate_feedback() {
     echo ""
     echo "- Generated: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "- Host: $(hostname)"
-    echo "- Generator: storage_check.sh v3.2"
+    echo "- Generator: storage_check.sh v3.5"
     echo ""
     echo "---"
     echo ""
@@ -1244,107 +1259,306 @@ time_machine_manager() {
 # ══════════════════════════════════════════════════════════════
 #  11) APPLICATIONS MANAGER
 # ══════════════════════════════════════════════════════════════
+#
+#   Full-screen paged view over a single cached scan. State lives in
+#   globals so the sub-actions (delete/move/restore) can reuse the scan
+#   and the on-screen numbering instead of re-walking the disk:
+#
+#     APP_PATH/NAME/KB/LOC/STATE/TARGET[1..APP_N]  the cache
+#     VIS[]        visible rows after scope+filter+sort; row number N
+#                  on screen is VIS[N-1]
+#     APPS_DIRTY   set by any action that changed the disk -> rescan
+#
 applications_manager() {
-  clear
-  section "📱 APPLICATIONS MANAGER"
-  echo -e "  ${DIM}Deletion moves the app to Trash — changes are permanent.${RESET}\n"
+  APPS_PAGE=1; APPS_SORT="size_desc"; APPS_FILTER=""; APPS_SCOPE="all"; APPS_DIRTY=0
+  _apps_scan
 
-  local found=0
-
-  section "/Applications  (system-wide)"
-  if [ -d /Applications ]; then
-    found=1
-    du -sk /Applications/*.app 2>/dev/null | sort -rn | while read kb path; do
-      printf "  %-10s %s\n" "$(color_size $(human_kb $kb))" "$(basename "$path")"
-    done
-  else
-    skipped "Not found"
-  fi
-
-  section "~/Applications  (user installs)"
-  if [ -d "$HOME/Applications" ]; then
-    found=1
-    du -sk "$HOME/Applications"/*.app 2>/dev/null | sort -rn | while read kb path; do
-      printf "  %-10s %s\n" "$(color_size $(human_kb $kb))" "$(basename "$path")"
-    done
-  else
-    skipped "Not found"
-  fi
-
-  [ "$found" -eq 0 ] && { info "No applications found."; _back_to_menu; return; }
-
-  echo ""
-  info "Total /Applications: $(du -sh /Applications 2>/dev/null | cut -f1)"
-  [ -d "$HOME/Applications" ] && info "Total ~/Applications: $(du -sh "$HOME/Applications" 2>/dev/null | cut -f1)"
-
-  echo ""
-  local am_loop=1
+  local am_loop=1 am_choice
   while [ "$am_loop" -eq 1 ]; do
-    ask_choice "[d]elete  [m]ove to USB  [r]estore  [x]relink missing  [b]ack"
+    if [ "$APPS_DIRTY" -eq 1 ]; then APPS_DIRTY=0; _apps_scan; fi
+    _apps_view
+    _apps_screen
+    ask_choice "[d]elete [m]ove [r]estore [x]relink · [n/p]age [/]filter [s]ort [t]scope [R]escan · [b]ack"
     read -r am_choice
     case "$am_choice" in
-      d) _delete_apps_multi ;;
-      m) _move_app_to_usb ;;
-      r) _restore_app_from_usb ;;
-      x) _relink_missing_apps ;;
+      n|N) [ "$APPS_PAGE" -lt "$APPS_PAGES" ] && APPS_PAGE=$((APPS_PAGE+1)) ;;
+      p|P) [ "$APPS_PAGE" -gt 1 ] && APPS_PAGE=$((APPS_PAGE-1)) ;;
+      /)   echo -ne "\n  ${BCYAN}Filter by name ${DIM}(blank clears)${RESET}${BCYAN}: ${RESET}"
+           read -r APPS_FILTER; APPS_PAGE=1 ;;
+      s|S) case "$APPS_SORT" in
+             size_desc) APPS_SORT="size_asc" ;;
+             size_asc)  APPS_SORT="name" ;;
+             *)         APPS_SORT="size_desc" ;;
+           esac; APPS_PAGE=1 ;;
+      t|T) case "$APPS_SCOPE" in
+             all) APPS_SCOPE="sys" ;;
+             sys) APPS_SCOPE="usr" ;;
+             *)   APPS_SCOPE="all" ;;
+           esac; APPS_PAGE=1 ;;
+      R)   _apps_scan; APPS_PAGE=1 ;;
+      d|D) _delete_apps_multi ;;
+      m|M) _move_app_to_usb ;;
+      r)   _restore_app_from_usb ;;
+      x|X) _relink_missing_apps ;;
       b|B|q|Q) am_loop=0 ;;
-      *) warning "Invalid option — try one of the keys shown" ;;
+      "") ;;   # bare Enter just redraws
+      *) warning "Invalid option — try one of the keys shown"; sleep 1 ;;
     esac
   done
 
-  _back_to_menu
+  main_menu
+}
+
+# ── Scan every .app once into the cache, with a live progress counter ──
+_apps_scan() {
+  clear
+  section "📱 APPLICATIONS MANAGER"
+  APP_PATH=(); APP_NAME=(); APP_KB=(); APP_LOC=(); APP_STATE=(); APP_TARGET=()
+  APP_N=0
+
+  local -a raw
+  local app
+  for app in /Applications/*.app "$HOME/Applications"/*.app; do
+    { [ -e "$app" ] || [ -L "$app" ]; } || continue
+    raw+=("$app")
+  done
+
+  local total=${#raw[@]}
+  if [ "$total" -eq 0 ]; then return; fi
+
+  # Pass 1 — cheap metadata (no disk walk): name, location, state, target.
+  local idx=1 target
+  local -a measure   # path whose size we need, per index ("" = skip)
+  for app in "${raw[@]}"; do
+    APP_PATH[$idx]="$app"
+    APP_NAME[$idx]="$(basename "$app" .app)"
+    case "$app" in "$HOME"/*) APP_LOC[$idx]="~/App" ;; *) APP_LOC[$idx]="/App" ;; esac
+    APP_TARGET[$idx]=""
+    APP_KB[$idx]=0
+    measure[$idx]=""
+
+    if [ -L "$app" ]; then
+      target=$(readlink "$app")
+      APP_TARGET[$idx]="$target"
+      APP_STATE[$idx]="ext"
+      [ -e "$target" ] && measure[$idx]="$target"
+    else
+      measure[$idx]="$app"
+      if _wiz_protected "$app"; then
+        APP_STATE[$idx]="lock"
+      elif [ ! -O "$app" ]; then
+        # Top-level bundle not owned by us -> installed with admin rights.
+        # Advisory only; _app_removable still gates every actual removal.
+        APP_STATE[$idx]="admin"
+      else
+        APP_STATE[$idx]="ok"
+      fi
+    fi
+    idx=$((idx+1))
+  done
+  APP_N=$((idx-1))
+
+  # Pass 2 — sizes. `du` here is I/O-bound (external volumes especially),
+  # so run it in small parallel batches: roughly halves the wait versus a
+  # serial loop. Results land in one file per index.
+  local work; work=$(mktemp -d 2>/dev/null) || work=""
+  if [ -n "$work" ]; then
+    local i
+    for ((i=1; i<=APP_N; i++)); do
+      [ -n "${measure[$i]}" ] || continue
+      ( du -sk "${measure[$i]}" 2>/dev/null | cut -f1 > "$work/$i" ) &
+      if [ $(( i % 12 )) -eq 0 ]; then
+        wait
+        printf "\r  ${DIM}Scanning %d/%d apps…${RESET}" "$i" "$APP_N"
+      fi
+    done
+    wait
+    printf "\r  ${DIM}Scanning %d/%d apps…${RESET}" "$APP_N" "$APP_N"
+    for ((i=1; i<=APP_N; i++)); do
+      if [ -f "$work/$i" ]; then
+        local kb; kb=$(cat "$work/$i" 2>/dev/null)
+        APP_KB[$i]=${kb:-0}
+      fi
+    done
+    [ -d "$work" ] && rm -rf "$work"
+  fi
+  printf "\r%-70s\r" ""
+}
+
+# ── Rebuild VIS from the cache: scope filter, name filter, sort order ──
+_apps_view() {
+  VIS=()
+  local i rows="" sorted k n
+  for ((i=1; i<=APP_N; i++)); do
+    case "$APPS_SCOPE" in
+      sys) [ "${APP_LOC[$i]}" = "/App" ]  || continue ;;
+      usr) [ "${APP_LOC[$i]}" = "~/App" ] || continue ;;
+    esac
+    if [ -n "$APPS_FILTER" ]; then
+      echo "${APP_NAME[$i]}" | grep -qiF -- "$APPS_FILTER" || continue
+    fi
+    rows="$rows${APP_KB[$i]}	${APP_NAME[$i]}	$i
+"
+  done
+
+  if [ -n "$rows" ]; then
+    case "$APPS_SORT" in
+      size_asc) sorted=$(printf '%s' "$rows" | sort -t'	' -k1,1n) ;;
+      name)     sorted=$(printf '%s' "$rows" | sort -t'	' -k2,2f) ;;
+      *)        sorted=$(printf '%s' "$rows" | sort -t'	' -k1,1nr) ;;
+    esac
+    while IFS='	' read -r k n i; do
+      [ -n "$i" ] && VIS+=("$i")
+    done <<< "$sorted"
+  fi
+
+  # Page geometry (recomputed each draw so window resizes are picked up).
+  # chrome = box(4) + disk bar(1) + column header(1) + 3 dividers/page line(3)
+  #          + prompt(2) + 1 spare; the filter line adds one more.
+  local lines; lines=$(tput lines 2>/dev/null); lines=${lines:-24}
+  local chrome=12
+  [ -n "$APPS_FILTER" ] && chrome=13
+  APPS_ROWS=$(( lines - chrome ))
+  [ "$APPS_ROWS" -lt 5 ] && APPS_ROWS=5
+  local count=${#VIS[@]}
+  APPS_PAGES=$(( (count + APPS_ROWS - 1) / APPS_ROWS ))
+  [ "$APPS_PAGES" -lt 1 ] && APPS_PAGES=1
+  [ "$APPS_PAGE" -gt "$APPS_PAGES" ] && APPS_PAGE=$APPS_PAGES
+  [ "$APPS_PAGE" -lt 1 ] && APPS_PAGE=1
+}
+
+# ── Draw the whole screen ──────────────────────────────────────
+_apps_screen() {
+  clear
+  local count=${#VIS[@]}
+  local i total_kb=0
+  for i in "${VIS[@]}"; do total_kb=$(( total_kb + ${APP_KB[$i]} )); done
+
+  local scope_label sort_label
+  case "$APPS_SCOPE" in
+    sys) scope_label="/Applications" ;;
+    usr) scope_label="~/Applications" ;;
+    *)   scope_label="all" ;;
+  esac
+  case "$APPS_SORT" in
+    size_asc) sort_label="size (small first)" ;;
+    name)     sort_label="name" ;;
+    *)        sort_label="size (big first)" ;;
+  esac
+
+  _disk_stats
+  local left right pad
+  echo -e "${BMAGENTA}╭─ APPLICATIONS ───────────────────────────────────────────╮${RESET}"
+  left="$count apps · $(human_kb "$total_kb")"
+  right="Free ${DISK_FREE} of ${DISK_TOTAL}"
+  pad=$(( 56 - ${#left} - ${#right} )); [ "$pad" -lt 1 ] && pad=1
+  printf "${BMAGENTA}│${RESET} %s%*s%s ${BMAGENTA}│${RESET}\n" "$left" "$pad" "" "$right"
+  left="scope: $scope_label"
+  right="sort: $sort_label"
+  pad=$(( 56 - ${#left} - ${#right} )); [ "$pad" -lt 1 ] && pad=1
+  printf "${BMAGENTA}│${RESET} %s%*s%s ${BMAGENTA}│${RESET}\n" "$left" "$pad" "" "$right"
+  if [ -n "$APPS_FILTER" ]; then
+    printf "${BMAGENTA}│${RESET} %-56.56s ${BMAGENTA}│${RESET}\n" "filter: \"$APPS_FILTER\"  (press / and enter blank to clear)"
+  fi
+  echo -e "${BMAGENTA}╰──────────────────────────────────────────────────────────╯${RESET}"
+  echo -e "  ${DISK_COLOR}[$(_disk_bar_str 40)] ${DISK_PCT}%${RESET}"
+
+  if [ "$count" -eq 0 ]; then
+    if [ "$APP_N" -eq 0 ]; then
+      info "No applications found."
+    else
+      info "No apps match the current filter/scope."
+    fi
+    echo ""
+    divider
+    return
+  fi
+
+  echo -e "  ${DIM} #   SIZE      NAME                             LOC    STATE${RESET}"
+  divider
+
+  local start=$(( (APPS_PAGE - 1) * APPS_ROWS ))
+  local end=$(( start + APPS_ROWS )); [ "$end" -gt "$count" ] && end=$count
+  local pos state_cell
+  for ((pos=start; pos<end; pos++)); do
+    i=${VIS[$pos]}
+    case "${APP_STATE[$i]}" in
+      lock)  state_cell="${BRED}🔒 protected${RESET}" ;;
+      admin) state_cell="${BYELLOW}⛨ admin${RESET}" ;;
+      ext)   if [ -n "${APP_TARGET[$i]}" ] && [ -e "${APP_TARGET[$i]}" ]; then
+               state_cell="${BCYAN}↗ external${RESET}"
+             else
+               state_cell="${BRED}↗ drive offline${RESET}"
+             fi ;;
+      *)     state_cell="${BGREEN}●${RESET}" ;;
+    esac
+    printf "  %2d  %s %-32.32s %-6s %b\n" \
+      "$((pos+1))" "$(_size_cell "${APP_KB[$i]}")" "${APP_NAME[$i]}" "${APP_LOC[$i]}" "$state_cell"
+  done
+
+  divider
+  printf "  ${DIM}page %d/%d · showing %d-%d of %d${RESET}\n" \
+    "$APPS_PAGE" "$APPS_PAGES" "$((start+1))" "$end" "$count"
+}
+
+# ── Post-action summary: counts, space reclaimed, new free space ──
+#   usage: _apps_result <ok> <skipped> <failed> <freed_kb>
+_apps_result() {
+  echo ""
+  divider
+  printf "  ${BGREEN}%d done${RESET}   ${DIM}%d skipped${RESET}   ${BRED}%d failed${RESET}\n" \
+    "${1:-0}" "${2:-0}" "${3:-0}"
+  [ "${4:-0}" -gt 0 ] && info "Reclaimed ~$(human_kb "$4") on the internal disk"
+  info "Free space now: $(df -h / | awk 'NR==2{print $4}')"
+  divider
+  [ "${1:-0}" -gt 0 ] && APPS_DIRTY=1
+  press_any_key
 }
 
 # ══════════════════════════════════════════════════════════════
 #   DELETE ONE OR MORE APPS (numbered multi-select)
 # ══════════════════════════════════════════════════════════════
 _delete_apps_multi() {
-  section "🗑️  Select apps to delete"
-
-  # Collect apps sorted by size descending
-  local app_list app_list_unsorted app
-  app_list_unsorted=$(find /Applications "$HOME/Applications" -maxdepth 1 -name "*.app" -type d ! -type l 2>/dev/null)
-  app_list=$(echo "$app_list_unsorted" | while read app; do
-    local kb; kb=$(du -sk "$app" 2>/dev/null | cut -f1)
-    echo "$kb	$app"
-  done | sort -rn | cut -f2)
-
-  local -a app_paths app_locked
-  local idx=1
-  while IFS= read -r app; do
-    [ -z "$app" ] && continue
-    app_paths[$idx]="$app"
-    local kb; kb=$(du -sk "$app" 2>/dev/null | cut -f1)
-    if _wiz_protected "$app"; then
-      app_locked[$idx]=1
-      printf "  %2d) %-9s %s  ${BRED}🔒 PROTECTED${RESET}\n" "$idx" "$(color_size $(human_kb "${kb:-0}"))" "$(basename "$app")"
-    else
-      app_locked[$idx]=0
-      printf "  %2d) %-9s %s\n" "$idx" "$(color_size $(human_kb "${kb:-0}"))" "$(basename "$app")"
-    fi
-    idx=$((idx+1))
-  done <<< "$app_list"
-
-  if [ "$idx" -eq 1 ]; then
-    info "No deletable apps found."
-    return
+  section "🗑️  Delete apps"
+  local n=${#VIS[@]}
+  if [ "$n" -eq 0 ]; then
+    info "No apps in the current view."; press_any_key; return
   fi
 
-  echo -ne "\n  ${BCYAN}App number(s) to delete ${DIM}(e.g. 2 or 1,3,5-7)${RESET}${BCYAN}, blank to cancel: ${RESET}"
+  # Map on-screen row numbers (1..n across all pages) onto the cache.
+  local -a app_paths app_locked
+  local pos gi idx=1
+  for ((pos=0; pos<n; pos++)); do
+    gi=${VIS[$pos]}
+    app_paths[$idx]="${APP_PATH[$gi]}"
+    case "${APP_STATE[$gi]}" in
+      lock) app_locked[$idx]=1 ;;
+      ext)  app_locked[$idx]=2 ;;
+      *)    app_locked[$idx]=0 ;;
+    esac
+    idx=$((idx+1))
+  done
+
+  echo -ne "\n  ${BCYAN}App number(s) to delete ${DIM}(from the list, e.g. 2 or 1,3,5-7)${RESET}${BCYAN}, blank to cancel: ${RESET}"
   read -r sel
-  [ -z "$sel" ] && { skipped "Cancelled"; return; }
+  [ -z "$sel" ] && { skipped "Cancelled"; press_any_key; return; }
 
   local -a idxs
   idxs=($(_parse_selection "$sel" $((idx-1))))
   if [ "${#idxs[@]}" -eq 0 ]; then
-    warning "No valid selection"; return
+    warning "No valid selection"; press_any_key; return
   fi
 
-  # Filter out protected apps
+  # Filter out protected and externally-hosted apps
   local -a selectable
+  local skip_n=0 i
   for i in "${idxs[@]}"; do
     if [ "${app_locked[$i]:-0}" -eq 1 ]; then
       danger "'$(basename "${app_paths[$i]}")' is protected (sync/messaging app) — skipped. Manage it from the app itself."
+      skip_n=$((skip_n+1))
+    elif [ "${app_locked[$i]:-0}" -eq 2 ]; then
+      warning "'$(basename "${app_paths[$i]}")' lives on an external drive (this is just a launcher link) — use [r]estore, or delete it on the drive. Skipped."
+      skip_n=$((skip_n+1))
     else
       selectable+=("$i")
     fi
@@ -1352,38 +1566,46 @@ _delete_apps_multi() {
 
   if [ "${#selectable[@]}" -eq 0 ]; then
     skipped "Nothing selectable was chosen"
+    _apps_result 0 "$skip_n" 0 0
     return
   fi
 
   echo ""; info "Selected for deletion:"
-  local total_kb=0 i
+  local total_kb=0
   for i in "${selectable[@]}"; do
     local p="${app_paths[$i]}"
     local kb; kb=$(du -sk "$p" 2>/dev/null | cut -f1); kb=${kb:-0}
     total_kb=$((total_kb+kb))
-    printf "  - %-9s %s\n" "$(color_size $(human_kb "$kb"))" "$(basename "$p")"
+    printf "  - %s %s\n" "$(_size_cell "$kb")" "$(basename "$p")"
   done
 
   echo ""
-  if ! confirm "Delete these ${#selectable[@]} app(s), freeing ~$(human_kb "$total_kb")? This moves them to Trash-equivalent (permanent rm)."; then
-    skipped "Cancelled"; return
+  if ! confirm "Delete these ${#selectable[@]} app(s), freeing ~$(human_kb "$total_kb")? This is a permanent rm — there is no Trash step."; then
+    skipped "Cancelled"; press_any_key; return
   fi
 
+  local ok_n=0 fail_n=0 freed_kb=0
   for i in "${selectable[@]}"; do
     local p="${app_paths[$i]}"
     if [ -e "$p" ]; then
+      local kb; kb=$(du -sk "$p" 2>/dev/null | cut -f1); kb=${kb:-0}
       if ! _app_removable "$p"; then
         danger "'$(basename "$p")' was installed with admin rights (root-owned files) — delete it via Finder instead (asks for your admin password). Skipped."
+        skip_n=$((skip_n+1))
         continue
       fi
       rm -rf "$p" 2>/dev/null
       if [ -e "$p" ]; then
         danger "Could not fully delete '$(basename "$p")' (permission denied) — it may need Finder/admin removal."
+        fail_n=$((fail_n+1))
       else
         success "Deleted $(basename "$p")"
+        ok_n=$((ok_n+1)); freed_kb=$((freed_kb+kb))
       fi
     fi
   done
+
+  _apps_result "$ok_n" "$skip_n" "$fail_n" "$freed_kb"
 }
 
 # ── Selection parsing (used by app delete/move/restore below) ──
@@ -1439,51 +1661,45 @@ _external_volumes() {
 # ══════════════════════════════════════════════════════════════
 _move_app_to_usb() {
   section "🔌 Move App to USB / External Drive"
-
-  # Collect apps sorted by size descending
-  local app_list app_list_unsorted app
-  app_list_unsorted=$(find /Applications "$HOME/Applications" -maxdepth 1 -name "*.app" -type d ! -type l 2>/dev/null)
-  app_list=$(echo "$app_list_unsorted" | while read app; do
-    local kb; kb=$(du -sk "$app" 2>/dev/null | cut -f1)
-    echo "$kb	$app"
-  done | sort -rn | cut -f2)
-
-  local -a app_paths app_locked
-  local idx=1
-  while IFS= read -r app; do
-    [ -z "$app" ] && continue
-    app_paths[$idx]="$app"
-    local kb; kb=$(du -sk "$app" 2>/dev/null | cut -f1)
-    if _wiz_protected "$app"; then
-      app_locked[$idx]=1
-      printf "  %2d) %-9s %s  ${BRED}🔒 PROTECTED${RESET}\n" "$idx" "$(color_size $(human_kb "${kb:-0}"))" "$(basename "$app")"
-    else
-      app_locked[$idx]=0
-      printf "  %2d) %-9s %s\n" "$idx" "$(color_size $(human_kb "${kb:-0}"))" "$(basename "$app")"
-    fi
-    idx=$((idx+1))
-  done <<< "$app_list"
-
-  if [ "$idx" -eq 1 ]; then
-    info "No movable apps found (already-moved apps are symlinks — use [r]estore)."
-    return
+  local n=${#VIS[@]}
+  if [ "$n" -eq 0 ]; then
+    info "No apps in the current view."; press_any_key; return
   fi
 
-  echo -ne "\n  ${BCYAN}App number(s) to move ${DIM}(e.g. 2 or 1,3,5-7)${RESET}${BCYAN}, blank to cancel: ${RESET}"
+  # Map on-screen row numbers (1..n across all pages) onto the cache.
+  local -a app_paths app_locked
+  local pos gi idx=1
+  for ((pos=0; pos<n; pos++)); do
+    gi=${VIS[$pos]}
+    app_paths[$idx]="${APP_PATH[$gi]}"
+    case "${APP_STATE[$gi]}" in
+      lock) app_locked[$idx]=1 ;;
+      ext)  app_locked[$idx]=2 ;;
+      *)    app_locked[$idx]=0 ;;
+    esac
+    idx=$((idx+1))
+  done
+
+  echo -ne "\n  ${BCYAN}App number(s) to move ${DIM}(from the list, e.g. 2 or 1,3,5-7)${RESET}${BCYAN}, blank to cancel: ${RESET}"
   read -r sel
-  [ -z "$sel" ] && { skipped "Cancelled"; return; }
+  [ -z "$sel" ] && { skipped "Cancelled"; press_any_key; return; }
 
   local -a sel_idxs
   sel_idxs=($(_parse_selection "$sel" $((idx-1))))
   if [ "${#sel_idxs[@]}" -eq 0 ]; then
-    warning "No valid selection"; return
+    warning "No valid selection"; press_any_key; return
   fi
 
-  # Filter out protected apps
+  # Filter out protected and already-external apps
   local -a selectable
+  local skip_n=0 i
   for i in "${sel_idxs[@]}"; do
     if [ "${app_locked[$i]:-0}" -eq 1 ]; then
       danger "'$(basename "${app_paths[$i]}")' is protected (sync/messaging app) — skipped. Manage it from the app itself."
+      skip_n=$((skip_n+1))
+    elif [ "${app_locked[$i]:-0}" -eq 2 ]; then
+      skipped "'$(basename "${app_paths[$i]}")' already lives on an external drive — skipped."
+      skip_n=$((skip_n+1))
     else
       selectable+=("$i")
     fi
@@ -1491,13 +1707,14 @@ _move_app_to_usb() {
 
   if [ "${#selectable[@]}" -eq 0 ]; then
     skipped "Nothing selectable was chosen"
+    _apps_result 0 "$skip_n" 0 0
     return
   fi
 
   local vols; vols=$(_external_volumes)
   if [ -z "$vols" ]; then
     warning "No external/USB drives are mounted. Connect one and try again."
-    return
+    press_any_key; return
   fi
 
   echo ""; info "Mounted external volumes:"
@@ -1511,10 +1728,10 @@ _move_app_to_usb() {
 
   echo -ne "\n  ${BCYAN}Destination volume number (blank to cancel): ${RESET}"
   read -r vsel
-  [ -z "$vsel" ] && { skipped "Cancelled"; return; }
+  [ -z "$vsel" ] && { skipped "Cancelled"; press_any_key; return; }
   local vol="${vol_names[$vsel]}"
   if [ -z "$vol" ] || [ ! -d "/Volumes/$vol" ]; then
-    warning "Invalid selection"; return
+    warning "Invalid selection"; press_any_key; return
   fi
 
   local dest_dir="/Volumes/$vol/AppsOnExternal"
@@ -1526,19 +1743,20 @@ _move_app_to_usb() {
     local p="${app_paths[$i]}"
     local kb; kb=$(du -sk "$p" 2>/dev/null | cut -f1); kb=${kb:-0}
     total_kb=$((total_kb+kb))
-    printf "  - %-9s %s\n" "$(color_size $(human_kb "$kb"))" "$(basename "$p")"
+    printf "  - %s %s\n" "$(_size_cell "$kb")" "$(basename "$p")"
   done
 
   if [ "$total_kb" -gt "$avail_kb" ]; then
     danger "Not enough free space on '$vol' ($(human_kb "$avail_kb") free, need $(human_kb "$total_kb") total)"
-    return
+    press_any_key; return
   fi
 
   echo ""
   if ! confirm "Move these ${#selectable[@]} app(s) ($(human_kb "$total_kb")) to '$vol'? They will only launch while this drive is connected."; then
-    skipped "Cancelled"; return
+    skipped "Cancelled"; press_any_key; return
   fi
 
+  local ok_n=0 fail_n=0 freed_kb=0
   mkdir -p "$dest_dir"
   for i in "${selectable[@]}"; do
     local app="${app_paths[$i]}"
@@ -1553,6 +1771,7 @@ _move_app_to_usb() {
         use_sudo=1
       else
         skipped "Skipped '$app_name'"
+        skip_n=$((skip_n+1))
         continue
       fi
     fi
@@ -1567,13 +1786,16 @@ _move_app_to_usb() {
         if [ -e "$app" ]; then
           danger "Could not fully remove '$app_name' — restoring it from the external copy."
           ditto "$dest" "$app" 2>/dev/null
+          fail_n=$((fail_n+1))
           continue
         fi
         ln -s "$dest" "$app"
         success "Linked '$app_name' to existing external copy — freed $(human_kb "$app_kb") on internal disk"
+        ok_n=$((ok_n+1)); freed_kb=$((freed_kb+app_kb))
         continue
       else
         skipped "Skipped '$app_name'"
+        skip_n=$((skip_n+1))
         continue
       fi
     fi
@@ -1585,6 +1807,7 @@ _move_app_to_usb() {
       echo -e "${BRED}failed${RESET}"
       danger "Copy failed or destination is empty — '$app_name' left untouched."
       rm -rf "$dest" 2>/dev/null
+      fail_n=$((fail_n+1))
       continue
     fi
 
@@ -1604,6 +1827,7 @@ _move_app_to_usb() {
         echo -e "${BRED}failed${RESET}"
         danger "'$app_name' may be damaged. A full copy is safe at: $dest — restore it with Finder or reinstall the app."
       fi
+      fail_n=$((fail_n+1))
       continue
     fi
     local link_ok=0
@@ -1614,10 +1838,14 @@ _move_app_to_usb() {
     fi
     if [ "$link_ok" -eq 0 ]; then
       danger "Could not create the launcher link for '$app_name'. The app now lives only at: $dest"
+      fail_n=$((fail_n+1))
       continue
     fi
     success "Moved '$app_name' — freed $(human_kb "$app_kb") on internal disk"
+    ok_n=$((ok_n+1)); freed_kb=$((freed_kb+app_kb))
   done
+
+  _apps_result "$ok_n" "$skip_n" "$fail_n" "$freed_kb"
 }
 
 # ══════════════════════════════════════════════════════════════
@@ -1626,12 +1854,14 @@ _move_app_to_usb() {
 _restore_app_from_usb() {
   section "🔄 Restore App from USB / External Drive"
 
+  # Externally-hosted apps come from the cached scan (renumbered here,
+  # since this is a subset of the main list).
   local -a link_paths
   local -a link_targets
-  local idx=1
-  for app in /Applications/*.app "$HOME/Applications"/*.app; do
-    [ -L "$app" ] || continue
-    local target; target=$(readlink "$app")
+  local idx=1 gi
+  for ((gi=1; gi<=APP_N; gi++)); do
+    [ "${APP_STATE[$gi]}" = "ext" ] || continue
+    local app="${APP_PATH[$gi]}" target="${APP_TARGET[$gi]}"
     link_paths[$idx]="$app"
     link_targets[$idx]="$target"
     local status="${BGREEN}connected${RESET}"
@@ -1642,17 +1872,17 @@ _restore_app_from_usb() {
 
   if [ "$idx" -eq 1 ]; then
     info "No externally-moved apps found."
-    return
+    press_any_key; return
   fi
 
-  echo -ne "\n  ${BCYAN}App number(s) to restore ${DIM}(e.g. 2 or 1,3,5-7)${RESET}${BCYAN}, blank to cancel: ${RESET}"
+  echo -ne "\n  ${BCYAN}App number(s) to restore ${DIM}(numbers from THIS list, e.g. 2 or 1,3,5-7)${RESET}${BCYAN}, blank to cancel: ${RESET}"
   read -r sel
-  [ -z "$sel" ] && { skipped "Cancelled"; return; }
+  [ -z "$sel" ] && { skipped "Cancelled"; press_any_key; return; }
 
   local -a sel_idxs
   sel_idxs=($(_parse_selection "$sel" $((idx-1))))
   if [ "${#sel_idxs[@]}" -eq 0 ]; then
-    warning "No valid selection"; return
+    warning "No valid selection"; press_any_key; return
   fi
 
   echo ""; info "Selected to restore:"
@@ -1663,9 +1893,10 @@ _restore_app_from_usb() {
 
   echo ""
   if ! confirm "Restore these ${#sel_idxs[@]} app(s) back to internal disk?"; then
-    skipped "Cancelled"; return
+    skipped "Cancelled"; press_any_key; return
   fi
 
+  local ok_n=0 skip_n=0 fail_n=0
   for i in "${sel_idxs[@]}"; do
     local app="${link_paths[$i]}"
     local target="${link_targets[$i]}"
@@ -1673,6 +1904,7 @@ _restore_app_from_usb() {
 
     if [ ! -e "$target" ]; then
       danger "Target '$target' is not reachable — skipping '$app_name'"
+      skip_n=$((skip_n+1))
       continue
     fi
 
@@ -1686,15 +1918,19 @@ _restore_app_from_usb() {
       danger "Restore failed for '$app_name' — re-linking to external copy so it stays usable."
       rm -rf "$restore_path" 2>/dev/null
       ln -s "$target" "$restore_path"
+      fail_n=$((fail_n+1))
       continue
     fi
 
     success "Restored '$app_name' to internal disk"
+    ok_n=$((ok_n+1))
     if confirm "Delete the external copy at '$target'?"; then
       rm -rf "$target"
       success "Removed external copy"
     fi
   done
+
+  _apps_result "$ok_n" "$skip_n" "$fail_n" 0
 }
 
 # ══════════════════════════════════════════════════════════════
@@ -1709,7 +1945,7 @@ _relink_missing_apps() {
   local vols; vols=$(_external_volumes)
   if [ -z "$vols" ]; then
     warning "No external/USB drives are mounted. Connect one and try again."
-    return
+    press_any_key; return
   fi
 
   local -a cand_bundle cand_name
@@ -1735,24 +1971,24 @@ _relink_missing_apps() {
 
   if [ "$idx" -eq 1 ]; then
     info "No missing links found — every external app already has a launcher."
-    return
+    press_any_key; return
   fi
 
   info "Found $((idx-1)) app(s) on external drive(s) with no launcher in /Applications or ~/Applications:"
   local i
   for ((i=1; i<idx; i++)); do
     local kb; kb=$(du -sk "${cand_bundle[$i]}" 2>/dev/null | cut -f1); kb=${kb:-0}
-    printf "  %2d) %-9s %-30s ${DIM}%s${RESET}\n" "$i" "$(color_size $(human_kb "$kb"))" "${cand_name[$i]}" "${cand_bundle[$i]}"
+    printf "  %2d) %s %-30s ${DIM}%s${RESET}\n" "$i" "$(_size_cell "$kb")" "${cand_name[$i]}" "${cand_bundle[$i]}"
   done
 
-  echo -ne "\n  ${BCYAN}App number(s) to relink ${DIM}(e.g. 2 or 1,3,5-7)${RESET}${BCYAN}, blank to cancel: ${RESET}"
+  echo -ne "\n  ${BCYAN}App number(s) to relink ${DIM}(numbers from THIS list, e.g. 2 or 1,3,5-7)${RESET}${BCYAN}, blank to cancel: ${RESET}"
   read -r sel
-  [ -z "$sel" ] && { skipped "Cancelled"; return; }
+  [ -z "$sel" ] && { skipped "Cancelled"; press_any_key; return; }
 
   local -a sel_idxs
   sel_idxs=($(_parse_selection "$sel" $((idx-1))))
   if [ "${#sel_idxs[@]}" -eq 0 ]; then
-    warning "No valid selection"; return
+    warning "No valid selection"; press_any_key; return
   fi
 
   echo ""
@@ -1765,17 +2001,19 @@ _relink_missing_apps() {
   esac
   mkdir -p "$dest_base" 2>/dev/null
 
-  local relinked=0
+  local relinked=0 skip_n=0 fail_n=0
   for i in "${sel_idxs[@]}"; do
     local bundle="${cand_bundle[$i]}" name="${cand_name[$i]}"
     local target="$dest_base/$name"
 
     if _wiz_protected "$target" || _wiz_protected "$bundle"; then
       danger "'$name' is protected — skipped."
+      skip_n=$((skip_n+1))
       continue
     fi
     if [ -e "$target" ] || [ -L "$target" ]; then
       warning "'$name' already exists at '$target' — skipped."
+      skip_n=$((skip_n+1))
       continue
     fi
 
@@ -1785,11 +2023,11 @@ _relink_missing_apps() {
       relinked=$((relinked+1))
     else
       danger "Could not create the launcher link for '$name' at '$target'."
+      fail_n=$((fail_n+1))
     fi
   done
 
-  echo ""
-  info "$relinked app(s) relinked."
+  _apps_result "$relinked" "$skip_n" "$fail_n" 0
 }
 
 # ══════════════════════════════════════════════════════════════
