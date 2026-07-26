@@ -59,6 +59,26 @@ _disk_bar_str() {
   echo "$bar"
 }
 
+# Height of the terminal window, in rows.
+# NOTE: do not use `$(tput lines)` here. tput reads the window size with an
+# ioctl on its own stdout; inside a command substitution that is a pipe, the
+# ioctl fails and tput silently reports the terminfo default (usually 24)
+# instead of the real window. Ask the controlling terminal directly.
+# Redirect stderr BEFORE opening /dev/tty: bash applies redirections left to
+# right, and if /dev/tty cannot be opened (no controlling terminal, e.g. when
+# the script is piped) the shell's own error would otherwise reach the screen.
+_term_lines() {
+  local l
+  # stdin is the terminal for a normal run; /dev/tty covers a redirected stdin.
+  l=$(stty size 2>/dev/null | awk '{print $1}')
+  case "$l" in ''|*[!0-9]*) l=$(stty size 2>/dev/null < /dev/tty | awk '{print $1}') ;; esac
+  case "$l" in ''|*[!0-9]*) l="$LINES" ;; esac
+  case "$l" in ''|*[!0-9]*) l=$(tput lines 2>/dev/null) ;; esac
+  case "$l" in ''|*[!0-9]*) l=24 ;; esac
+  [ "$l" -lt 10 ] && l=10
+  echo "$l"
+}
+
 # Colored size from KB, padded to 8 visible columns (ANSI-safe alignment).
 _size_cell() {
   local s; s=$(human_kb "${1:-0}")
@@ -1415,7 +1435,7 @@ _apps_view() {
   # Page geometry (recomputed each draw so window resizes are picked up).
   # chrome = box(4) + disk bar(1) + column header(1) + 3 dividers/page line(3)
   #          + prompt(2) + 1 spare; the filter line adds one more.
-  local lines; lines=$(tput lines 2>/dev/null); lines=${lines:-24}
+  local lines; lines=$(_term_lines)
   local chrome=12
   [ -n "$APPS_FILTER" ] && chrome=13
   APPS_ROWS=$(( lines - chrome ))
