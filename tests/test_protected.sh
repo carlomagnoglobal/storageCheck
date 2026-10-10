@@ -131,6 +131,66 @@ got=$(_rm_tracked "$HOME/locked" 2048); rc=$?
 chmod 700 "$HOME/locked"
 [ "$rc" -ne 0 ] && [ "$got" -lt 2048 ] && ok "_rm_tracked reports partial failure" || bad "_rm_tracked hid a failed delete (rc=$rc got=$got)"
 
+echo ""; echo "_du_batch"
+mk "sz/a b"; mk "sz/trail" 1024
+DU_PATHS=("$HOME/sz/a b" "" "$HOME/sz/missing" "$HOME/sz/trail/" "$HOME/sz/a b")
+_du_batch test >/dev/null 2>&1
+[ "${DU_KB[0]}" -ge 2048 ] && [ "${DU_KB[1]}" = 0 ] && [ "${DU_KB[2]}" = 0 ] \
+  && [ "${DU_KB[3]}" -ge 1024 ] && [ "${DU_KB[3]}" -lt 2048 ] && [ "${DU_KB[4]}" = "${DU_KB[0]}" ] \
+  && ok "sizes land in input order (spaces, empty, missing, trailing /, duplicate)" \
+  || bad "_du_batch results: ${DU_KB[*]}"
+
+echo ""; echo "new REVIEW sources"
+old() { touch -t 202001010000 "$HOME/$1"; }
+mk ".npm/_cacache"
+mkdir -p "$HOME/Downloads"
+dd if=/dev/zero of="$HOME/Downloads/Old Installer.dmg" bs=1024 count=12288 2>/dev/null; old "Downloads/Old Installer.dmg"
+dd if=/dev/zero of="$HOME/Downloads/new.dmg" bs=1024 count=12288 2>/dev/null
+mk "code/oldproj/node_modules/pkg" 12288; old "code/oldproj/node_modules"
+mk "code/newproj/node_modules/pkg" 12288
+mk "code/oldproj/node_modules/pkg/node_modules/x" 12288; old "code/oldproj/node_modules/pkg/node_modules"; old "code/oldproj/node_modules"
+_wizard_collect >/dev/null 2>&1
+tier_of() { local c t kb p l n; for c in "${CANDIDATES[@]}"; do IFS='|' read -r t kb p l n <<< "$c"; [ "$p" = "$HOME/$1" ] && { echo "$t"; return; }; done; echo none; }
+[ "$(tier_of .npm/_cacache)" = REVIEW ]                  && ok "npm cache is REVIEW"            || bad "npm cache: $(tier_of .npm/_cacache)"
+[ "$(tier_of "Downloads/Old Installer.dmg")" = REVIEW ] && ok "old installer is REVIEW"        || bad "old installer: $(tier_of "Downloads/Old Installer.dmg")"
+[ "$(tier_of Downloads/new.dmg)" = none ]               && ok "recent installer not offered"   || bad "recent installer offered"
+[ "$(tier_of code/oldproj/node_modules)" = REVIEW ]     && ok "stale node_modules is REVIEW"   || bad "stale node_modules: $(tier_of code/oldproj/node_modules)"
+[ "$(tier_of code/newproj/node_modules)" = none ]       && ok "fresh node_modules not offered" || bad "fresh node_modules offered"
+[ "$(tier_of code/oldproj/node_modules/pkg/node_modules)" = none ] && ok "nested node_modules not listed separately" || bad "nested node_modules listed"
+
+echo ""; echo "_owner_running"
+_running_snapshot
+case "$RUNNING" in *"|finder|"*"|com.apple.finder|"*) ok "live snapshot sees Finder" ;; *) bad "live snapshot missed Finder: ${RUNNING:0:80}" ;; esac
+RUNNING="|spotify|com.spotify.client|code|"
+_owner_running "$HOME/Library/Caches/com.spotify.client"            && ok "running app's cache detected (bundle id)"   || bad "missed running bundle id"
+_owner_running "$HOME/Library/Application Support/Code/Cache"       && ok "running app's cache detected (bundle name)" || bad "missed running bundle name"
+_owner_running "$HOME/Library/Caches/com.example.other"             && bad "false positive on idle app" || ok "idle app not flagged"
+_owner_running "$HOME/.Trash"                                       && bad "non-app path flagged"       || ok "non-app path not flagged"
+
+echo ""; echo "_app_leftovers"
+# Never touch the real Trash from tests: "trash" into the fixture instead.
+_to_trash() { mkdir -p "$HOME/.Trash"; mv "$1" "$HOME/.Trash/" 2>/dev/null; [ ! -e "$1" ]; }
+B="com.test.goneapp"
+mk "Library/Containers/$B"; mk "Library/Application Support/GoneApp"; mk "Library/Group Containers/ABCDE12345.$B"
+mkdir -p "$HOME/Library/Preferences"; echo x > "$HOME/Library/Preferences/$B.plist"
+mk "Library/Containers/com.test.otherapp"
+gone_bid=("$B"); gone_name=("GoneApp")
+echo a | _app_leftovers >/dev/null 2>&1
+gone=1
+for p in "Library/Containers/$B" "Library/Application Support/GoneApp" "Library/Group Containers/ABCDE12345.$B" "Library/Preferences/$B.plist"; do
+  [ -e "$HOME/$p" ] && { bad "leftover not removed: $p"; gone=0; }
+done
+[ "$gone" -eq 1 ] && ok "all leftovers of the removed app moved to Trash"
+[ -e "$HOME/Library/Containers/com.test.otherapp" ] && ok "other apps' data untouched" || bad "other app's data removed"
+[ -e "$HOME/Library/Containers/com.apple.Safari" ] && ok "protected data untouched" || bad "protected data removed"
+gone_bid=("com.apple.Safari"); gone_name=("Safari")
+mk "Library/Containers/com.apple.Safari/Data/x"
+echo a | _app_leftovers >/dev/null 2>&1
+[ -e "$HOME/Library/Containers/com.apple.Safari" ] && ok "com.apple.* app leftovers never offered" || bad "com.apple.* leftovers removed"
+gone_bid=(""); gone_name=("NoBid"); mk "Library/Application Support/NoBid"
+echo a | _app_leftovers >/dev/null 2>&1
+[ -e "$HOME/Library/Application Support/NoBid" ] && ok "no bundle id → nothing matched" || bad "name-only match removed data"
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

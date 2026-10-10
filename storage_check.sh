@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║      MAC STORAGE MANAGER v3.7 — by Claude                    ║
+# ║      MAC STORAGE MANAGER v3.8 — by Claude                    ║
 # ║      Audit · Analyze · Clean · Report · Wizard · Feedback    ║
 # ╚══════════════════════════════════════════════════════════════╝
 
@@ -160,6 +160,120 @@ _rm_tracked() {
   echo "$before"
 }
 
+# Moves a path to the Trash, so the user can undo it (Finder → Put Back).
+# Uses macOS's /usr/bin/trash when present, else asks Finder. Returns 1 if
+# the path is still there afterwards. Space is reclaimed only once the
+# Trash is emptied, so callers report trashed KB separately from freed KB.
+_to_trash() {
+  local path="$1"
+  if [ -z "$path" ] || { [ ! -e "$path" ] && [ ! -L "$path" ]; }; then return 1; fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo -e "  ${DIM}[dry run] would move to Trash: $path${RESET}" >&2
+    return 0
+  fi
+  if [ -x /usr/bin/trash ]; then
+    /usr/bin/trash "$path" >/dev/null 2>&1
+  else
+    osascript -e 'on run argv' -e 'tell application "Finder" to delete (POSIX file (item 1 of argv) as alias)' \
+              -e 'end run' "$path" >/dev/null 2>&1
+  fi
+  [ ! -e "$path" ] && [ ! -L "$path" ]
+}
+
+# Removes a REVIEW-tier item: Trash first (undoable); permanent rm only if
+# that fails AND the user agrees. Prints its own result line and sets
+# RM_FREED / RM_TRASHED (KB) — globals, so don't call it inside $(...).
+_remove_undoable() {
+  local path="$1" kb="${2:-0}" label="$3"
+  RM_FREED=0; RM_TRASHED=0
+  if _to_trash "$path"; then
+    RM_TRASHED=$kb
+    success "Moved to Trash: $label ${DIM}($(human_kb "$kb"))${RESET}"
+    return 0
+  fi
+  [ -e "$path" ] || return 1
+  warning "Could not move $label to the Trash."
+  if ! confirm "Delete it permanently instead?"; then skipped "Kept $label"; return 1; fi
+  if RM_FREED=$(_rm_tracked "$path" "$kb"); then
+    success "Deleted $label ${DIM}($(human_kb "$kb"))${RESET}"
+    return 0
+  fi
+  danger "Could not fully delete $label (in use, or needs Full Disk Access)"
+  return 1
+}
+
+# Sizes many paths at once: reads DU_PATHS[0..n-1], fills DU_KB[0..n-1].
+# du is I/O-bound, so xargs -P runs several at a time (no batch stragglers);
+# "$1" labels a live "Sizing N/M" counter. Empty paths size as 0.
+_du_batch() {
+  local label="${1:-items}" n=${#DU_PATHS[@]} i work="" out done_n
+  DU_KB=()
+  [ "$n" -eq 0 ] && return
+  _mktemp work -d || work=""
+  if [ -z "$work" ]; then   # no temp dir: fall back to serial
+    for ((i=0; i<n; i++)); do
+      DU_KB[$i]=$( [ -n "${DU_PATHS[$i]}" ] && du -sk "${DU_PATHS[$i]}" 2>/dev/null | cut -f1 )
+      DU_KB[$i]=${DU_KB[$i]:-0}
+    done
+    return
+  fi
+  out="$work/out"; : > "$out"
+  for ((i=0; i<n; i++)); do [ -n "${DU_PATHS[$i]}" ] && printf '%s\0' "${DU_PATHS[$i]}"; done \
+    | xargs -0 -P 8 -n 1 du -sk 2>/dev/null > "$out" &
+  local pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    done_n=$(wc -l < "$out" | tr -d ' ')
+    printf "\r  ${DIM}Sizing %d/%d %s…${RESET}" "$done_n" "$n" "$label"
+    command sleep 0.2
+  done
+  wait "$pid" 2>/dev/null
+  printf "\r%-70s\r" ""
+  # Join results back to input order by exact path (du echoes its argument).
+  local kb
+  i=0
+  while IFS= read -r kb; do DU_KB[$i]=${kb:-0}; i=$((i+1)); done < <(
+    { printf '%s\n' "${DU_PATHS[@]}"; echo "--END--"; cat "$out"; } | awk -F'\t' '
+      !sep && $0=="--END--" { sep=1; next }
+      !sep { order[++n]=$0; next }
+      { kb=$1; sub(/^[^\t]*\t/, ""); size[$0]=kb }
+      END { for (i=1;i<=n;i++) print ((order[i] in size) ? size[order[i]] : 0) }')
+  rm -rf "$work"
+}
+
+# Snapshot of running GUI apps as "|name|bundle-name|bundle-id|…" (lowercase),
+# from the .app bundles of every running process. Used to warn before
+# deleting the cache of an app that is open (it can crash or rewrite it).
+_running_snapshot() {
+  RUNNING="|"
+  local app info nm bn bid
+  while IFS= read -r app; do
+    [ -d "$app" ] || continue
+    info="$app/Contents/Info.plist"
+    nm=$(basename "$app" .app)
+    bn=$(plutil -extract CFBundleName raw "$info" 2>/dev/null)
+    bid=$(plutil -extract CFBundleIdentifier raw "$info" 2>/dev/null)
+    RUNNING="$RUNNING$(printf '%s|%s|%s|' "$nm" "$bn" "$bid" | tr '[:upper:]' '[:lower:]' | sed 's/||*/|/g')"
+  done < <(ps -axo comm= 2>/dev/null | awk '{ i=index($0, ".app/"); if (i) print substr($0, 1, i+3) }' | sort -u)
+}
+
+# True if the app owning a ~/Library cache/log/state path is running
+# (per the last _running_snapshot). Sets RUNNING_OWNER for messages.
+_owner_running() {
+  local p="$1" rel owner
+  RUNNING_OWNER=""
+  case "$p" in
+    "$HOME/Library/Caches/"*|"$HOME/Library/Application Support/"*|"$HOME/Library/Containers/"*|\
+    "$HOME/Library/Saved Application State/"*|"$HOME/Library/Logs/"*) ;;
+    *) return 1 ;;
+  esac
+  rel=${p#"$HOME/Library/"}; rel=${rel#*/}; owner=${rel%%/*}; owner=${owner%.savedState}
+  [ -n "$owner" ] || return 1
+  case "$RUNNING" in
+    *"|$(echo "$owner" | tr '[:upper:]' '[:lower:]')|"*) RUNNING_OWNER="$owner"; return 0 ;;
+  esac
+  return 1
+}
+
 # Standard prompt for submenu action keys, e.g. ask_choice "d=delete  m=move  b=back"
 menu_group() { echo -e "\n  ${DIM}─── $1 ───${RESET}"; }
 ask_choice() { echo -ne "\n  ${BCYAN}$1 › ${RESET}"; }
@@ -202,7 +316,7 @@ _main_menu_draw() {
   clear
   echo ""
   echo -e "${BMAGENTA}╔══════════════════════════════════════════════════════════╗${RESET}"
-  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.7                         ║${RESET}"
+  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.8                         ║${RESET}"
   echo -e "${BMAGENTA}║     $(date '+%a %d %b %Y — %H:%M')                              ║${RESET}"
   echo -e "${BMAGENTA}╚══════════════════════════════════════════════════════════╝${RESET}"
   echo ""
@@ -284,7 +398,7 @@ _wiz_protected() {
 
 _wizard_header() {
   clear
-  echo -e "${BGREEN}${BOLD}🪄  SAFE CLEANUP WIZARD${RESET}  ${DIM}(v3.7 pattern engine)${RESET}"
+  echo -e "${BGREEN}${BOLD}🪄  SAFE CLEANUP WIZARD${RESET}  ${DIM}(v3.8 pattern engine)${RESET}"
   divider
   echo -e "  Offers only items that are ${BGREEN}safe by design${RESET}: caches, logs, temp & re-downloadables."
   echo -e "  It ${BRED}never${RESET} touches macOS system data, cloud sync, chats, mail, or your files."
@@ -335,16 +449,19 @@ safe_wizard() {
 }
 
 # Fills CANDIDATES ("TIER|kb|path|label|note"). Every path goes through
-# _wiz_protected() before it is added — keep it that way.
+# _wiz_protected() before it is queued — keep it that way. Paths are queued
+# first and sized at the end in one parallel _du_batch pass.
 _wizard_collect() {
   CANDIDATES=()
+  local -a QT QP QL QN QM
+  local qn=0
   # add_candidate TIER path label note [min_kb]
   add_candidate() {
     local tier="$1" path="$2" label="$3" note="$4" min="${5:-1}"
     [ -e "$path" ] || return
     _wiz_protected "$path" && return
-    local kb; kb=$(du -sk "$path" 2>/dev/null | cut -f1); [ -z "$kb" ] && kb=0
-    [ "$kb" -ge "$min" ] && CANDIDATES+=("$tier|$kb|$path|$label|$note")
+    QT[$qn]="$tier"; QP[$qn]="$path"; QL[$qn]="$label"; QN[$qn]="$note"; QM[$qn]="$min"
+    qn=$((qn+1))
   }
 
   # Build a set of installed app identifiers for accurate leftover detection
@@ -389,13 +506,11 @@ _wizard_collect() {
   # Matches Cache, Caches, Code Cache, *Cache (GPUCache/Dawn*Cache/ShaderCache),
   # CachedData, logs, Crashpad, tmp — at any depth, pruned so we never recurse
   # into a matched dir. The PROTECTED guard skips sync/messaging/mail paths.
+  local hit owner
   while IFS= read -r hit; do
     [ -z "$hit" ] && continue
-    _wiz_protected "$hit" && continue
-    local kb=$(du -sk "$hit" 2>/dev/null | cut -f1); [ -z "$kb" ] && kb=0
-    [ "$kb" -lt 1024 ] && continue   # ignore <1MB noise
-    local owner=$(echo "$hit" | sed -E "s|$HOME/Library/(Application Support\|Containers)/||; s|/.*||")
-    CANDIDATES+=("SAFE|$kb|$hit|${owner} · $(basename "$hit")|App cache/log — rebuilds")
+    owner=${hit#"$HOME/Library/"}; owner=${owner#*/}; owner=${owner%%/*}
+    add_candidate SAFE "$hit" "${owner} · $(basename "$hit")" "App cache/log — rebuilds" 1024
   done < <(find "$HOME/Library/Application Support" "$HOME/Library/Containers" \
               -maxdepth 5 -type d \( \
                  -iname "Cache" -o -iname "Caches" -o -iname "Code Cache" \
@@ -425,6 +540,46 @@ _wizard_collect() {
     [ -L "$a" ] && continue
     [ -d "$a" ] && add_candidate REVIEW "$a" "IDE · $(basename "$a")" "Re-installable (JetBrains Toolbox etc.)"
   done
+
+  # ───── 🟡 REVIEW: developer caches (each tool's standard location) ─────
+  # Re-downloadable, but a full re-download/re-index costs time — so REVIEW.
+  for d in "$HOME/Library/Developer/Xcode/"*" DeviceSupport"/*; do
+    add_candidate REVIEW "$d" "Xcode device support · $(basename "$d")" "Re-copied from the device when it next connects" 1024
+  done
+  add_candidate REVIEW "$HOME/Library/Developer/Xcode/Archives" "Xcode · Archives"     "Old app builds — only needed to re-ship or symbolicate them" 1024
+  add_candidate REVIEW "$HOME/.npm/_cacache"                    "npm cache"            "Re-downloaded on next install" 1024
+  add_candidate REVIEW "$HOME/Library/pnpm/store"               "pnpm store"           "Re-downloaded on next install" 1024
+  add_candidate REVIEW "$HOME/.gradle/caches"                   "Gradle caches"        "Re-downloaded on next build" 1024
+  add_candidate REVIEW "$HOME/.m2/repository"                   "Maven repository"     "Re-downloaded on next build" 1024
+  add_candidate REVIEW "$HOME/.cargo/registry"                  "Cargo registry"       "Re-downloaded on next build" 1024
+  add_candidate REVIEW "$HOME/go/pkg/mod"                       "Go module cache"      "Re-downloaded on next build (same as go clean -modcache)" 1024
+  add_candidate REVIEW "$HOME/.cocoapods/repos"                 "CocoaPods spec repos" "Re-cloned on next pod install" 1024
+
+  # node_modules not touched for 90+ days, in project folders under $HOME
+  # (Library and dot-folders pruned; nested node_modules never entered).
+  local nm
+  while IFS= read -r nm; do
+    add_candidate REVIEW "$nm" "node_modules · $(basename "$(dirname "$nm")")" "Untouched 90+ days — npm install restores it" 10240
+  done < <(find "$HOME" -maxdepth 6 \( -path "$HOME/Library" -o \( -name '.*' ! -path "$HOME" \) \) -prune \
+              -o -type d -name node_modules -prune -mtime +90 -print 2>/dev/null)
+
+  # ───── 🟡 REVIEW: old installers & firmware ─────
+  local f
+  while IFS= read -r f; do
+    add_candidate REVIEW "$f" "Old download · $(basename "$f")" "Installer/archive, untouched 30+ days" 10240
+  done < <(find "$HOME/Downloads" -maxdepth 2 -type f \( -iname '*.dmg' -o -iname '*.pkg' -o -iname '*.zip' \
+              -o -iname '*.iso' -o -iname '*.xip' \) -mtime +30 2>/dev/null)
+  for f in "$HOME/Library/iTunes/"*" Software Updates"/*.ipsw; do
+    add_candidate REVIEW "$f" "Device firmware · $(basename "$f")" "Re-downloaded if ever needed for a restore" 1024
+  done
+
+  # ── Size everything in one parallel pass, then apply each min size ──
+  DU_PATHS=("${QP[@]}")
+  _du_batch "candidates"
+  local i
+  for ((i=0; i<qn; i++)); do
+    [ "${DU_KB[$i]:-0}" -ge "${QM[$i]}" ] && CANDIDATES+=("${QT[$i]}|${DU_KB[$i]}|${QP[$i]}|${QL[$i]}|${QN[$i]}")
+  done
 }
 
 _wizard_list() {
@@ -453,24 +608,32 @@ _wizard_auto_safe() {
     return
   fi
 
+  # Caches of apps that are open right now are skipped: the app may crash,
+  # or simply rewrite them a moment later.
+  _running_snapshot
   echo ""
-  local freed=0 got fails=0
+  local freed=0 got fails=0 busy="" busy_n=0
   for c in "${CANDIDATES[@]}"; do
     IFS='|' read -r tier kb path label note <<< "$c"
-    if [ "$tier" = "SAFE" ] && [ -e "$path" ]; then
-      if got=$(_rm_tracked "$path" "$kb"); then
-        success "$label ${DIM}($(human_kb $kb))${RESET}"
-      else
-        warning "$label — only partly removed ${DIM}(in use, or needs Full Disk Access)${RESET}"
-        fails=$((fails+1))
-      fi
-      freed=$((freed+got))
+    [ "$tier" = "SAFE" ] && [ -e "$path" ] || continue
+    if _owner_running "$path"; then
+      busy_n=$((busy_n+1))
+      case "$busy" in *"$RUNNING_OWNER"*) ;; *) busy="${busy:+$busy, }$RUNNING_OWNER" ;; esac
+      continue
     fi
+    if got=$(_rm_tracked "$path" "$kb"); then
+      success "$label ${DIM}($(human_kb $kb))${RESET}"
+    else
+      warning "$label — only partly removed ${DIM}(in use, or needs Full Disk Access)${RESET}"
+      fails=$((fails+1))
+    fi
+    freed=$((freed+got))
   done
   echo ""
   divider
   echo -e "  ${BGREEN}✨ Done! Freed ${BYELLOW}${BOLD}$(human_kb $freed)${RESET}"
   [ "$fails" -gt 0 ] && warning "$fails item(s) could not be fully removed"
+  [ "$busy_n" -gt 0 ] && info "Skipped $busy_n item(s) of running apps ($busy) — quit them and run the wizard again"
   divider
   _back_to_menu
 }
@@ -483,9 +646,11 @@ _wizard_pick() {
     IFS='|' read -r tier kb path label note <<< "$c"
     [ -e "$path" ] && total_items=$((total_items+1))
   done
-  info "$total_items items to review — y = delete, Enter = keep"
+  info "$total_items items to review — y = remove, Enter = keep"
+  info "🟢 items are deleted; 🟡 items go to the Trash (undo with Finder → Put Back)"
 
-  local freed=0 item_num=0
+  _running_snapshot
+  local freed=0 trashed=0 item_num=0 got
   for c in "${CANDIDATES[@]}"; do
     IFS='|' read -r tier kb path label note <<< "$c"
     [ ! -e "$path" ] && continue
@@ -495,16 +660,20 @@ _wizard_pick() {
     echo -e "  ${tag} [${item_num}/${total_items}] ${BOLD}${label}${RESET}  ${BOLD}$(color_size $(human_kb $kb))${RESET}"
     echo -e "     ${DIM}${note}${RESET}"
     echo -e "     ${DIM}${path}${RESET}"
-    echo -ne "     ${BYELLOW}Delete? [y/N]: ${RESET}"
+    _owner_running "$path" && echo -e "     ${BYELLOW}⚠️  ${RUNNING_OWNER} is running — quit it first, or it may crash${RESET}"
+    echo -ne "     ${BYELLOW}Remove? [y/N]: ${RESET}"
     read -r ans
     if [[ "$ans" =~ ^[Yy]$ ]]; then
-      local got
-      if got=$(_rm_tracked "$path" "$kb"); then
+      if [ "$tier" = "REVIEW" ]; then
+        _remove_undoable "$path" "$kb" "$label"
+        freed=$((freed+RM_FREED)); trashed=$((trashed+RM_TRASHED))
+      elif got=$(_rm_tracked "$path" "$kb"); then
         success "Deleted ${DIM}($(human_kb $kb))${RESET}"
+        freed=$((freed+got))
       else
         warning "Only partly removed ${DIM}($(human_kb $got) freed — in use, or needs Full Disk Access)${RESET}"
+        freed=$((freed+got))
       fi
-      freed=$((freed+got))
     else
       skipped "Kept"
     fi
@@ -512,6 +681,7 @@ _wizard_pick() {
   echo ""
   divider
   echo -e "  ${BGREEN}✨ Total freed: ${BYELLOW}${BOLD}$(human_kb $freed)${RESET}"
+  [ "$trashed" -gt 0 ] && info "$(human_kb $trashed) moved to the Trash — empty it to reclaim that space"
   divider
   _back_to_menu
 }
@@ -577,16 +747,21 @@ full_audit() {
 quick_clean() {
   clear
   section "🧹 QUICK CLEAN — 100% Safe Items"
-  info "Scanning caches, logs, updater downloads, and leftovers..."
+  info "Scanning caches and logs (skips protected data and running apps)..."
   echo ""
 
   # Pass 1: scan and build "kb|path|label" preview lines. Every path goes
   # through _wiz_protected(), same as the wizard.
-  PREVIEW="" ; total_kb=0
+  PREVIEW="" ; total_kb=0 ; QC_BUSY=""
+  _running_snapshot
   _qc_scan() {
     local p="$1" l="$2"
     [ -e "$p" ] || return
     _wiz_protected "$p" && return
+    if _owner_running "$p"; then   # open app: leave its cache alone
+      case "$QC_BUSY" in *"$RUNNING_OWNER"*) ;; *) QC_BUSY="${QC_BUSY:+$QC_BUSY, }$RUNNING_OWNER" ;; esac
+      return
+    fi
     local kb=$(du -sk "$p" 2>/dev/null|cut -f1); kb=${kb:-0}
     [ "$kb" -gt 0 ] || return
     PREVIEW="${PREVIEW}${kb}|${p}|${l}"$'\n'
@@ -610,6 +785,8 @@ quick_clean() {
   done
   _qc_scan ~/Library/Application\ Support/Spotify/PersistentCache    "Spotify Cache"
   _qc_scan ~/.Trash                                                  "Trash"
+
+  [ -n "$QC_BUSY" ] && info "Skipping caches of running apps: $QC_BUSY ${DIM}(quit them to include)${RESET}"
 
   # Check if anything was found
   if [ "$total_kb" -eq 0 ]; then
@@ -660,23 +837,25 @@ quick_clean() {
 # ══════════════════════════════════════════════════════════════
 #   Broader/more aggressive than the wizard—offers IDEs, LM Studio models, VSCode extensions one-by-one
 # ══════════════════════════════════════════════════════════════
-TOTAL_FREED=""
+# Per-item "remove X?" used by the REVIEW-type screens (models, IDEs,
+# extensions, device backups). Items go to the Trash, so they can be put
+# back; TOTAL_FREED collects a summary line per item.
+TOTAL_FREED=""; TOTAL_TRASHED_KB=0
 safe_delete() {
   local path="$1" label="$2"
   if [ -e "$path" ]; then
-    local size=$(du -sh "$path" 2>/dev/null|cut -f1)
-    if confirm "Delete ${label} (${size})?"; then
-      if _rm_tracked "$path" 0 >/dev/null; then
-        success "Deleted ${label} — ${BYELLOW}${size}${RESET}"
-        TOTAL_FREED="${TOTAL_FREED}${size} ← ${label}\n"
-      else
-        danger "Could not fully delete ${label} (in use, or needs Full Disk Access)"
+    local kb; kb=$(du -sk "$path" 2>/dev/null | cut -f1); kb=${kb:-0}
+    if confirm "Remove ${label} ($(human_kb "$kb"))? It goes to the Trash"; then
+      if _remove_undoable "$path" "$kb" "$label"; then
+        local where=""; [ "$RM_TRASHED" -gt 0 ] && where=" (in Trash)"
+        TOTAL_FREED="${TOTAL_FREED}$(human_kb "$kb") ← ${label}${where}\n"
+        TOTAL_TRASHED_KB=$((TOTAL_TRASHED_KB+RM_TRASHED))
       fi
     else skipped "Skipped ${label}"; fi
   fi
 }
 interactive_clean() {
-  TOTAL_FREED=""   # summary below is for this run only
+  TOTAL_FREED=""; TOTAL_TRASHED_KB=0   # summary below is for this run only
   clear
   section "🎯 INTERACTIVE CLEAN"
   info "Asks before each deletion. Includes apps & models (more aggressive than the wizard)."
@@ -717,8 +896,9 @@ interactive_clean() {
   fi
   echo ""; divider
   if [ -n "$TOTAL_FREED" ]; then
-    echo -e "  ${BGREEN}✨ Deleted:${RESET}"; printf "$TOTAL_FREED" | while read l; do [ -n "$l" ] && echo -e "    ${GREEN}• $l${RESET}"; done
-  else info "Nothing deleted."; fi
+    echo -e "  ${BGREEN}✨ Removed:${RESET}"; printf "$TOTAL_FREED" | while read -r l; do [ -n "$l" ] && echo -e "    ${GREEN}• $l${RESET}"; done
+    [ "$TOTAL_TRASHED_KB" -gt 0 ] && info "$(human_kb "$TOTAL_TRASHED_KB") is in the Trash — empty it to reclaim the space"
+  else info "Nothing removed."; fi
   divider; _back_to_menu
 }
 
@@ -1020,34 +1200,31 @@ _viz_pie_chart() {
   while read -r b; do pcts[$i]="$b"; i=$((i+1)); done <<< "$bounds"
 
   echo ""
-  local rows=14 cols=28
-  for ((y=0; y<rows; y++)); do
-    local line="  "
-    for ((x=0; x<cols; x++)); do
-      local ch=$(awk -v x="$x" -v y="$y" -v cols="$cols" -v rows="$rows" -v n="$n" -v boundstr="$(printf '%s ' "${pcts[@]}")" '
-        BEGIN{
-          pi=3.14159265358979
-          cx=(cols-1)/2.0; cy=(rows-1)/2.0
-          dx=(x-cx)/ (cols/2.0); dy=(y-cy)/(rows/2.0)
-          dist=sqrt(dx*dx+dy*dy)
-          if (dist>1.0) { print " "; exit }
-          ang=atan2(-dy,dx)*180/pi
-          if (ang<0) ang+=360
-          pct = ang/360*100
-          split(boundstr, b, " ")
-          for (k=1;k<=n;k++) { if (pct<=b[k]) { print k; exit } }
-          print n
+  # Whole disc in ONE awk run (it used to start awk once per cell: 392
+  # processes). Colors/chars go in as "|"-joined lists; awk -v turns the
+  # \033 in the color vars into real escape bytes.
+  local rows=14 cols=28 IFS_OLD="$IFS"
+  local colors chars
+  IFS='|'; colors="${palette_colors[*]}"; chars="${palette_chars[*]}"; IFS="$IFS_OLD"
+  awk -v cols="$cols" -v rows="$rows" -v n="$n" -v boundstr="$(printf '%s ' "${pcts[@]}")" \
+      -v colors="$colors" -v chars="$chars" -v reset="$RESET" '
+    BEGIN {
+      pi = 3.14159265358979
+      split(boundstr, b, " "); split(colors, C, "|"); split(chars, H, "|")
+      cx = (cols-1)/2.0; cy = (rows-1)/2.0
+      for (y = 0; y < rows; y++) {
+        line = "  "
+        for (x = 0; x < cols; x++) {
+          dx = (x-cx)/(cols/2.0); dy = (y-cy)/(rows/2.0)
+          if (sqrt(dx*dx+dy*dy) > 1.0) { line = line " "; continue }
+          ang = atan2(-dy, dx)*180/pi; if (ang < 0) ang += 360
+          pct = ang/360*100; k = n
+          for (j = 1; j <= n; j++) if (pct <= b[j]) { k = j; break }
+          line = line C[k] H[k] reset
         }
-      ')
-      if [ "$ch" = " " ]; then
-        line+=" "
-      else
-        local slot=$((ch-1))
-        line+="${palette_colors[$slot]}${palette_chars[$slot]}${RESET}"
-      fi
-    done
-    echo -e "$line"
-  done
+        print line
+      }
+    }'
   echo ""
   for ((i=0; i<n; i++)); do
     local pct_disp
@@ -1097,6 +1274,12 @@ _print_recommendations() {
   [ -d "$HOME/Library/Group Containers/UBF8T346G9.OneDriveSyncClientSuite" ] && { warning "OneDrive local data — use Files On-Demand"; found=1; }
   [ -d ~/.lmstudio/models ] && { info "LM Studio models: $(du -sh ~/.lmstudio/models 2>/dev/null|cut -f1) — use the LM Studio manager"; found=1; }
   [ -d ~/.ollama/models ] && { info "Ollama models: $(du -sh ~/.ollama/models 2>/dev/null|cut -f1) — use the Ollama manager"; found=1; }
+  # Tool-managed stores: never rm these directly, point at the tool instead.
+  local dk="$HOME/Library/Containers/com.docker.docker/Data/vms"
+  [ -d "$dk" ] && { info "Docker VM disk: $(du -sh "$dk" 2>/dev/null|cut -f1) — reclaim with 'docker system prune' (never delete the file)"; found=1; }
+  local sims="$HOME/Library/Developer/CoreSimulator/Devices"
+  [ -d "$sims" ] && command -v xcrun >/dev/null 2>&1 && \
+    { info "iOS simulators: $(du -sh "$sims" 2>/dev/null|cut -f1) — 'xcrun simctl delete unavailable' removes outdated ones"; found=1; }
   [ "$found" -eq 0 ] && success "Looks clean! 🎉"
 }
 
@@ -1173,7 +1356,7 @@ generate_feedback() {
     echo ""
     echo "- Generated: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "- Host: $(hostname)"
-    echo "- Generator: storage_check.sh v3.7"
+    echo "- Generator: storage_check.sh v3.8"
     echo ""
     echo "---"
     echo ""
@@ -1431,8 +1614,13 @@ time_machine_manager() {
     warning "Total device backups: $total"
     info "Each folder below is one device backup"
     echo ""
+    local dev when
     for bk in "$mb"/*/; do
-      [ -d "$bk" ] && safe_delete "$bk" "Device backup: $(basename "$bk")"
+      [ -d "$bk" ] || continue
+      # Info.plist names the device; fall back to the UDID folder name.
+      dev=$(plutil -extract "Device Name" raw "${bk}Info.plist" 2>/dev/null)
+      when=$(plutil -extract "Last Backup Date" raw "${bk}Info.plist" 2>/dev/null | cut -c1-10)
+      safe_delete "$bk" "Device backup: ${dev:-$(basename "$bk")}${when:+ (last backup $when)}"
     done
   fi
 
@@ -1539,31 +1727,13 @@ _apps_scan() {
   done
   APP_N=$((idx-1))
 
-  # Pass 2 — sizes. `du` here is I/O-bound (external volumes especially),
-  # so run it in small parallel batches: roughly halves the wait versus a
-  # serial loop. Results land in one file per index.
-  local work=""; _mktemp work -d || work=""
-  if [ -n "$work" ]; then
-    local i
-    for ((i=1; i<=APP_N; i++)); do
-      [ -n "${measure[$i]}" ] || continue
-      ( du -sk "${measure[$i]}" 2>/dev/null | cut -f1 > "$work/$i" ) &
-      if [ $(( i % 12 )) -eq 0 ]; then
-        wait
-        printf "\r  ${DIM}Scanning %d/%d apps…${RESET}" "$i" "$APP_N"
-      fi
-    done
-    wait
-    printf "\r  ${DIM}Scanning %d/%d apps…${RESET}" "$APP_N" "$APP_N"
-    for ((i=1; i<=APP_N; i++)); do
-      if [ -f "$work/$i" ]; then
-        local kb; kb=$(cat "$work/$i" 2>/dev/null)
-        APP_KB[$i]=${kb:-0}
-      fi
-    done
-    [ -d "$work" ] && rm -rf "$work"
-  fi
-  printf "\r%-70s\r" ""
+  # Pass 2 — sizes, in parallel (du is I/O-bound, external volumes
+  # especially). DU_PATHS is 0-based; the cache is 1-based.
+  local i
+  DU_PATHS=()
+  for ((i=1; i<=APP_N; i++)); do DU_PATHS[$((i-1))]="${measure[$i]}"; done
+  _du_batch "apps"
+  for ((i=1; i<=APP_N; i++)); do APP_KB[$i]=${DU_KB[$((i-1))]:-0}; done
 }
 
 # ── Rebuild VIS from the cache: scope filter, name filter, sort order ──
@@ -1683,13 +1853,14 @@ _apps_screen() {
 }
 
 # ── Post-action summary: counts, space reclaimed, new free space ──
-#   usage: _apps_result <ok> <skipped> <failed> <freed_kb>
+#   usage: _apps_result <ok> <skipped> <failed> <freed_kb> [trashed_kb]
 _apps_result() {
   echo ""
   divider
   printf "  ${BGREEN}%d done${RESET}   ${DIM}%d skipped${RESET}   ${BRED}%d failed${RESET}\n" \
     "${1:-0}" "${2:-0}" "${3:-0}"
   [ "${4:-0}" -gt 0 ] && info "Reclaimed ~$(human_kb "$4") on the internal disk"
+  [ "${5:-0}" -gt 0 ] && info "$(human_kb "$5") is in the Trash — empty it to reclaim the space (or Put Back to undo)"
   info "Free space now: $(df -h "$DATA_VOL" | awk 'NR==2{print $4}')"
   divider
   [ "${1:-0}" -gt 0 ] && APPS_DIRTY=1
@@ -1762,11 +1933,12 @@ _delete_apps_multi() {
   done
 
   echo ""
-  if ! confirm "Delete these ${#selectable[@]} app(s), freeing ~$(human_kb "$total_kb")? This is a permanent rm — there is no Trash step."; then
+  if ! confirm "Move these ${#selectable[@]} app(s) (~$(human_kb "$total_kb")) to the Trash? (undo with Finder → Put Back)"; then
     skipped "Cancelled"; press_any_key; return
   fi
 
-  local ok_n=0 fail_n=0 freed_kb=0
+  local ok_n=0 fail_n=0 freed_kb=0 trashed_kb=0
+  local -a gone_bid gone_name
   for i in "${selectable[@]}"; do
     local p="${app_paths[$i]}"
     if [ -e "$p" ]; then
@@ -1776,18 +1948,86 @@ _delete_apps_multi() {
         skip_n=$((skip_n+1))
         continue
       fi
-      rm -rf "$p" 2>/dev/null
-      if [ -e "$p" ]; then
-        danger "Could not fully delete '$(basename "$p")' (permission denied) — it may need Finder/admin removal."
-        fail_n=$((fail_n+1))
+      # Read the bundle id before it's gone: it is how leftovers are found.
+      local bid; bid=$(plutil -extract CFBundleIdentifier raw "$p/Contents/Info.plist" 2>/dev/null)
+      if _remove_undoable "$p" "$kb" "$(basename "$p")"; then
+        ok_n=$((ok_n+1)); freed_kb=$((freed_kb+RM_FREED)); trashed_kb=$((trashed_kb+RM_TRASHED))
+        gone_bid+=("$bid"); gone_name+=("$(basename "$p" .app)")
       else
-        success "Deleted $(basename "$p")"
-        ok_n=$((ok_n+1)); freed_kb=$((freed_kb+kb))
+        fail_n=$((fail_n+1))
       fi
     fi
   done
 
-  _apps_result "$ok_n" "$skip_n" "$fail_n" "$freed_kb"
+  # Offer each removed app's leftover data (settings, caches, containers).
+  if [ "${#gone_name[@]}" -gt 0 ]; then
+    _app_leftovers
+    freed_kb=$((freed_kb+LEFT_FREED)); trashed_kb=$((trashed_kb+LEFT_TRASHED))
+  fi
+
+  _apps_result "$ok_n" "$skip_n" "$fail_n" "$freed_kb" "$trashed_kb"
+}
+
+# ── Leftover data of just-removed apps (AppCleaner-style) ──────
+# Reads gone_bid[] / gone_name[] from the caller (_delete_apps_multi).
+# Looks only at the standard per-app locations, named by bundle id (or the
+# exact app name), and skips an app entirely if another installed copy
+# still uses the same bundle id. Every path goes through _wiz_protected().
+# Sets LEFT_FREED / LEFT_TRASHED (KB).
+_app_leftovers() {
+  LEFT_FREED=0; LEFT_TRASHED=0
+  local L="$HOME/Library" k b nm cand p seen="|"
+  local -a lp lk ll
+
+  # Bundle ids of every app still installed, to protect shared data.
+  local live="|" a
+  for a in /Applications/*.app "$HOME/Applications"/*.app; do
+    [ -e "$a" ] || continue
+    live="$live$(plutil -extract CFBundleIdentifier raw "$a/Contents/Info.plist" 2>/dev/null | tr '[:upper:]' '[:lower:]')|"
+  done
+
+  for ((k=0; k<${#gone_name[@]}; k++)); do
+    b="${gone_bid[$k]}"; nm="${gone_name[$k]}"
+    [ -n "$b" ] || continue   # no bundle id → nothing we can match safely
+    case "$live" in *"|$(echo "$b" | tr '[:upper:]' '[:lower:]')|"*)
+      info "$nm: another installed copy uses $b — its data is left alone"; continue ;;
+    esac
+    for cand in \
+      "$L/Containers/$b" "$L/Application Scripts/$b" "$L/Caches/$b" "$L/Application Support/$b" \
+      "$L/Preferences/$b.plist" "$L/Saved Application State/$b.savedState" \
+      "$L/HTTPStorages/$b" "$L/HTTPStorages/$b.binarycookies" "$L/WebKit/$b" "$L/Logs/$b" \
+      "$L/Cookies/$b.binarycookies" "$L/Group Containers/group.$b" "$L/Group Containers/"*".$b" \
+      "$L/Application Support/$nm" "$L/Caches/$nm" "$L/Logs/$nm"; do
+      [ -e "$cand" ] || continue
+      _wiz_protected "$cand" && continue
+      # case-insensitive filesystem: dedupe on the lowercased path
+      p=$(echo "$cand" | tr '[:upper:]' '[:lower:]')
+      case "$seen" in *"|$p|"*) continue ;; esac
+      seen="$seen$p|"
+      lp+=("$cand"); ll+=("$nm")
+    done
+  done
+  [ "${#lp[@]}" -eq 0 ] && return
+
+  DU_PATHS=("${lp[@]}"); _du_batch "leftovers"
+  echo ""; info "Leftover data from the removed app(s):"
+  local i total=0
+  for ((i=0; i<${#lp[@]}; i++)); do
+    lk[$i]=${DU_KB[$i]:-0}; total=$((total+lk[$i]))
+    printf "  %2d) %s %-18.18s ${DIM}%s${RESET}\n" "$((i+1))" "$(_size_cell "${lk[$i]}")" "${ll[$i]}" "${lp[$i]#$HOME/}"
+  done
+  echo -ne "\n  ${BCYAN}Move to Trash: [a]ll ($(human_kb "$total")), numbers (e.g. 1,3), or Enter to keep: ${RESET}"
+  local sel; read -r sel
+  local -a pick
+  case "$sel" in
+    "") skipped "Kept all leftovers"; return ;;
+    a|A) for ((i=1; i<=${#lp[@]}; i++)); do pick+=("$i"); done ;;
+    *) pick=($(_parse_selection "$sel" "${#lp[@]}")) ;;
+  esac
+  for i in "${pick[@]}"; do
+    _remove_undoable "${lp[$((i-1))]}" "${lk[$((i-1))]}" "${lp[$((i-1))]#$HOME/}"
+    LEFT_FREED=$((LEFT_FREED+RM_FREED)); LEFT_TRASHED=$((LEFT_TRASHED+RM_TRASHED))
+  done
 }
 
 # ── Selection parsing (used by app delete/move/restore below) ──
@@ -2336,7 +2576,7 @@ vscode_manager() {
 # ══════════════════════════════════════════════════════════════
 #   ENTRY
 # ══════════════════════════════════════════════════════════════
-VERSION="3.7"
+VERSION="3.8"
 
 _usage() {
   cat <<USAGE

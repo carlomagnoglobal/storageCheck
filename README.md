@@ -21,11 +21,11 @@ The menu is grouped into four sections. All ANALYZE screens are read-only.
 ### 🧹 Clean
 - **🪄 Safe Cleanup Wizard**: the core feature, a pattern-based 3-tier classifier (see below)
 - **Quick Clean**: one confirmation for well-known caches and logs (same protection guard as the wizard)
-- **Interactive Clean**: asks item by item about IDEs, LM Studio models and VSCode extensions
-- **Time Machine & Backups**: local APFS snapshots and iPhone/iPad backups
+- **Interactive Clean**: asks item by item about IDEs, LM Studio models and VSCode extensions (they go to the Trash)
+- **Time Machine & Backups**: local APFS snapshots and iPhone/iPad backups (shown by device name and last backup date)
 
 ### 📦 Manage
-- **Applications**: paged, sortable, filterable list of every app with sizes. Delete apps, **move them to a USB/external drive** (leaving a launcher link), restore them, or relink apps whose launcher is missing
+- **Applications**: paged, sortable, filterable list of every app with sizes. Move apps to the Trash and **clean up their leftover data** (settings, caches, containers), **move them to a USB/external drive** (leaving a launcher link), restore them, or relink apps whose launcher is missing
 - **VSCode Extensions**: VS Code, Cursor, Windsurf, VSCodium and other forks: browse, delete, back up to Desktop
 - **LM Studio** / **Ollama**: model inventory with per-model deletion
 
@@ -38,10 +38,10 @@ The menu is grouped into four sections. All ANALYZE screens are read-only.
 Every candidate gets exactly one tier:
 
 - **🟢 SAFE**: caches, logs, temp files, updater payloads, Trash. Apps rebuild these. Offered for one-click bulk or item-by-item deletion.
-- **🟡 REVIEW**: re-downloadable but not free to lose (AI models, IDEs, extensions, `~/.cache`, leftover dot-folders whose app seems gone). Always item by item, never bulk.
+- **🟡 REVIEW**: re-downloadable but not free to lose: AI models, IDEs, extensions, `~/.cache`, leftover dot-folders whose app seems gone, developer caches (npm, pnpm, Gradle, Maven, Cargo, Go, CocoaPods, Xcode device support and archives), `node_modules` untouched for 90+ days, and installers in Downloads older than 30 days. Always item by item, never bulk, and they **go to the Trash** so you can undo.
 - **🔴 PROTECTED**: never shown, never offered. Blocks macOS data (`com.apple.*`), cloud sync (OneDrive, Dropbox, Google Drive/DriveFS, iCloud, CloudKit, Box, pCloud, Nextcloud, Synology, MEGA), messaging (WhatsApp, Telegram), Mail, Keychains, Photos and Office/Outlook, including their cache subfolders.
 
-Cache roots such as `~/Library/Caches` are scanned child by child, so a protected folder inside one is skipped rather than deleted along with it.
+Cache roots such as `~/Library/Caches` are scanned child by child, so a protected folder inside one is skipped rather than deleted along with it. Caches of apps that are **running** are skipped by auto-clean and Quick Clean (pick mode warns), because deleting them under an open app can crash it.
 
 ## Requirements
 

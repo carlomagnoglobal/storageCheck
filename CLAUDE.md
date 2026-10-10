@@ -62,11 +62,15 @@ SAFE candidates come from two sources, both pattern-based (not hardcoded per-app
 
 The scan lives in `_wizard_collect`; `safe_wizard` runs it once and then loops its menu over the same `CANDIDATES` (listing doesn't rescan). REVIEW also holds `~/.cache` (can hold HuggingFace models) and dot-folder leftovers (`~/.cursor`, `~/.ollama`, …) that have neither a matching `.app` nor a CLI on `PATH` — never SAFE, since "no .app" is only a guess. `~/Applications/*.app` symlinks (external-drive launchers) are skipped.
 
+More REVIEW sources: developer caches at each tool's standard location (Xcode DeviceSupport/Archives, `~/.npm/_cacache`, pnpm store, Gradle, Maven, Cargo, Go module cache, CocoaPods repos), `node_modules` untouched 90+ days (`find $HOME -maxdepth 6`, `~/Library` and dot-folders pruned, nested `node_modules` never entered), `.dmg/.pkg/.zip/.iso/.xip` in `~/Downloads` untouched 30+ days, and `.ipsw` firmware. Docker's VM disk and simulators are **tips only** in `_print_recommendations` (point at `docker system prune` / `xcrun simctl delete unavailable`) — never candidates.
+
+Candidates are queued by `add_candidate` (guard first) and sized at the end in one `_du_batch` pass. **Running apps:** `_running_snapshot` + `_owner_running` map a `~/Library/{Caches,Application Support,Containers,Logs,Saved Application State}/<owner>` path to a running `.app` (by name, CFBundleName or bundle id). Auto-clean and `quick_clean` skip those; pick mode warns.
+
 ### The Applications Manager screen (`applications_manager`)
 
 A full-screen, redrawn TUI built on **one cached scan** — the pattern to follow if another manager screen gets the same treatment.
 
-- `_apps_scan` fills parallel indexed arrays `APP_PATH/NAME/KB/LOC/STATE/TARGET[1..APP_N]` (Bash 3.2: no associative arrays). `APP_STATE` is one of `ok` / `ext` (symlink to an external drive) / `lock` (`_wiz_protected`) / `admin` (bundle not owned by the user). Sizing runs `du` in parallel batches because it is I/O-bound; a `Scanning N/M` counter shows progress.
+- `_apps_scan` fills parallel indexed arrays `APP_PATH/NAME/KB/LOC/STATE/TARGET[1..APP_N]` (Bash 3.2: no associative arrays). `APP_STATE` is one of `ok` / `ext` (symlink to an external drive) / `lock` (`_wiz_protected`) / `admin` (bundle not owned by the user). Sizing goes through the shared `_du_batch` (fill `DU_PATHS[0..]`, read `DU_KB[0..]`): `xargs -P 8 du -sk`, joined back by path, with a `Sizing N/M` counter. Use it for any new bulk sizing instead of a serial `du` loop.
 - `_apps_view` derives `VIS[]` — the visible rows after scope, name filter and sort — and the page geometry. **Row number N on screen is `VIS[N-1]`**; every sub-action maps the user's number back through `VIS`, so numbering stays consistent across pages, filters and sort orders.
 - `_apps_screen` draws header box + table + key bar. `_apps_result <ok> <skipped> <failed> <freed_kb>` closes every action and sets `APPS_DIRTY=1`, which makes the loop rescan.
 - The sub-actions (`_delete_apps_multi`, `_move_app_to_usb`, `_restore_app_from_usb`, `_relink_missing_apps`) **must not scan the disk themselves** — that was the original performance bug. Read the cache.
@@ -89,6 +93,8 @@ These hold today and any change must preserve them:
 5. **No `rm -rf` on a variable that could be empty or unset.** Every deletion site is `path`-guarded; if you add a new one, guard it the same way (`[ -e "$path" ] && rm -rf "$path"`, never a bare `rm -rf "$var"`).
 6. **Every menu function returns to `main_menu`'s loop** — by ending with `_back_to_menu` (waits for a key, then returns) or a plain `return`. **Never call `main_menu` from a feature**: it is a `while true` loop now, and calling it recursively grows the call stack for the whole session (the pre-v3.7 design). Don't leave a dead-end function that exits the script outside option `0`.
 7. **Apps that live on an external drive are never `rm`'d from the manager.** The entry in `/Applications` is only a launcher symlink; removing it would orphan the bundle on the drive. `_delete_apps_multi` refuses `APP_STATE=ext` and points at `[r]estore`.
+8. **REVIEW items and apps go to the Trash, not `rm`** (`_remove_undoable` → `_to_trash`: `/usr/bin/trash`, else Finder). Permanent `rm` happens only if trashing fails *and* the user confirms again. SAFE caches are still `rm`'d via `_rm_tracked`. Report trashed KB separately — it isn't reclaimed until the Trash is emptied.
+9. **App leftovers (`_app_leftovers`) are matched only by bundle id** (read before the app is trashed) in the standard per-app folders, plus the exact app name under Application Support/Caches/Logs. No bundle id → nothing is offered. If any still-installed app has the same bundle id, its data is left alone. Every path goes through `_wiz_protected()`.
 
 ## Style conventions already in use
 
@@ -102,15 +108,15 @@ These hold today and any change must preserve them:
 - Output helpers: `section "title"`, `success "msg"`, `warning "msg"`, `danger "msg"`, `info "msg"`, `skipped "msg"`, `divider`. Use these instead of raw `echo -e` for anything user-facing.
 - Sizes are tracked in **KB internally** (`du -sk`) and converted for display only at the last moment via `human_kb()`. Don't parse `du -sh` output for arithmetic — it's not reliably parseable across locales/sizes.
 - `confirm "question"` returns shell true/false for `[[ "$answer" =~ ^[Yy]$ ]]`; use it for any new per-item prompt instead of rolling a new read/case block.
-- All deletion happens through `rm -rf` after an explicit existence check; there is no trash/recycle step — be conservative, this is permanent.
+- SAFE-tier deletion is `rm -rf` (via `_rm_tracked`) after an explicit existence check — permanent, so be conservative. Everything re-downloadable or user-chosen (REVIEW items, apps, models, extensions, device backups, app leftovers) goes through `_remove_undoable` so it lands in the Trash.
 
 ## Known limitations / open items
 
 - `cloud_audit`, `app_support_deep`, `ai_tools_audit` are read-only by design — if asked to add deletion there, route it through the same `_wiz_protected()` guard rather than writing new ad-hoc checks.
 - `_match_folder()`'s segment list is rebuilt by scanning `/Applications`, `~/Applications`, `/System/Applications`, `/Applications/Utilities` every run (`generate_feedback` only) — this is intentionally not cached; keep it that way since installed apps can change between runs.
 - The script assumes a single-user `$HOME` and does not support being run as root or against another user's home directory.
-- Tests: `bash tests/test_protected.sh` builds a fake `$HOME` (sync engines, messaging, `com.apple.*`, mail, keychains next to ordinary caches) and checks `_wiz_protected`, `_wizard_collect`, the `quick_clean` preview, `_rm_tracked` and dry-run. **Run it after any change to `_wiz_protected`, `_wizard_collect` or `quick_clean`**, and add a fixture dir for every new protected category. The script can be `source`d without starting the menu (the entry block only runs when `BASH_SOURCE[0] = $0`), so interactive screens can be exercised headlessly by sourcing it, stubbing `clear`/`confirm`/`_back_to_menu`, and piping keystrokes in.
-- The version string appears in four places — the file header comment, the `main_menu` banner, the `safe_wizard` "pattern engine" label, and the `Generator:` line in `generate_feedback`. They are all **v3.7**, as is `VERSION` in the entry block (used by `--version`); update all five together (`grep -n 'v3\.[0-9]'`). Note this is a display version only, distinct from the historical "v3.2 rewrite" referenced above.
+- Tests: `bash tests/test_protected.sh` (65 checks; it also covers `_du_batch`, the new REVIEW sources, `_owner_running` and `_app_leftovers`, with `_to_trash` stubbed so nothing reaches the real Trash) builds a fake `$HOME` (sync engines, messaging, `com.apple.*`, mail, keychains next to ordinary caches) and checks `_wiz_protected`, `_wizard_collect`, the `quick_clean` preview, `_rm_tracked` and dry-run. **Run it after any change to `_wiz_protected`, `_wizard_collect` or `quick_clean`**, and add a fixture dir for every new protected category. The script can be `source`d without starting the menu (the entry block only runs when `BASH_SOURCE[0] = $0`), so interactive screens can be exercised headlessly by sourcing it, stubbing `clear`/`confirm`/`_back_to_menu`, and piping keystrokes in.
+- The version string appears in four places — the file header comment, the `main_menu` banner, the `safe_wizard` "pattern engine" label, and the `Generator:` line in `generate_feedback`. They are all **v3.8**, as is `VERSION` in the entry block (used by `--version`); update all five together (`grep -n 'v3\.[0-9]'`). Note this is a display version only, distinct from the historical "v3.2 rewrite" referenced above.
 
 ## When making changes
 
