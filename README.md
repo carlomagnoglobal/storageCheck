@@ -69,6 +69,14 @@ bash storage_check.sh
 bash storage_check.sh
 ```
 
+Options:
+
+```bash
+bash storage_check.sh --dry-run   # show what would be deleted or moved, change nothing
+bash storage_check.sh --help
+bash storage_check.sh --version
+```
+
 Pick an option from the numbered menu. Each screen returns to the menu when done; `0` exits. Menu numbers can change between versions, so this README refers to features by name.
 
 - **Quick cleanup:** Safe Cleanup Wizard → `a` (auto-clean all 🟢 items), or Quick Clean.
@@ -99,6 +107,7 @@ This guard is applied **before any candidate is offered for deletion**, ensuring
 ## Files
 
 - `storage_check.sh` — Single-file executable (~2300 lines). Organized as: color helpers → main menu → menu functions → shared helpers
+- `tests/test_protected.sh` — safety test suite (fake `$HOME`, no real files touched)
 - `CLAUDE.md` — Development notes, architecture overview, safety invariants, contribution guidelines
 - `README.md` — This file
 
@@ -107,6 +116,7 @@ This guard is applied **before any candidate is offered for deletion**, ensuring
 When modifying the script:
 
 - **Syntax check:** `bash -n storage_check.sh` must pass with zero warnings
+- **Safety tests:** `bash tests/test_protected.sh` must pass. It builds a throwaway fake home folder and checks that no protected path is ever offered for deletion
 - **Safety testing:** Changes to the Safe Wizard or `_wiz_protected()` must document which PROTECTED categories were tested against
 - **Pattern-based design:** Prefer extending pattern-based rules (find-based scans for Cache, logs, etc.) over adding hardcoded per-app paths
 - **Deletion guards:** Every `rm -rf` must be preceded by an existence check (`[ -e "$path" ] &&`)
@@ -118,7 +128,6 @@ See `CLAUDE.md` for detailed architecture and known limitations.
 
 - Single-user `$HOME` only; not designed for root or multi-user scenarios
 - Cloud storage auditing is read-only by design
-- No automated test suite (manual validation via syntax check + path tracing)
 - Installed app inventory is rebuilt on each run (not cached)
 
 ## Support

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║      MAC STORAGE MANAGER v3.6 — by Claude                    ║
+# ║      MAC STORAGE MANAGER v3.7 — by Claude                    ║
 # ║      Audit · Analyze · Clean · Report · Wizard · Feedback    ║
 # ╚══════════════════════════════════════════════════════════════╝
 
@@ -37,6 +37,50 @@ human_kb() {
     else if($1>=1024) printf "%.1fM", $1/1024
     else printf "%dK", $1
   }'
+}
+
+# ── Run state, temp files, interrupt handling ─────────────────
+DRY_RUN=0          # --dry-run: every deletion/move is reported, none performed
+TMP_PATHS=""       # newline-separated temp files/dirs, removed on any exit
+PENDING_MSG=""     # set during a move/restore's no-man's-land; shown if interrupted
+
+# mktemp wrapper that registers the result for cleanup.
+# usage: _mktemp VAR [-d]   — sets VAR; must NOT be called as $(_mktemp),
+# since a command substitution is a subshell and the registration would be lost.
+_mktemp() {
+  local __var="$1" __t; shift
+  __t=$(mktemp "$@" 2>/dev/null) || return 1
+  TMP_PATHS="${TMP_PATHS}${__t}"$'\n'
+  printf -v "$__var" '%s' "$__t"
+}
+
+_cleanup() {
+  local t
+  while IFS= read -r t; do
+    case "$t" in /tmp/*|/private/tmp/*|/var/folders/*|/private/var/folders/*) rm -rf "$t" 2>/dev/null ;; esac
+  done <<< "$TMP_PATHS"
+  TMP_PATHS=""
+}
+
+_on_interrupt() {
+  trap - INT TERM
+  echo ""
+  if [ -n "$PENDING_MSG" ]; then
+    echo -e "  ${BRED}🔥 Interrupted mid-operation.${RESET}"
+    echo -e "  ${BYELLOW}$PENDING_MSG${RESET}"
+  else
+    echo -e "  ${DIM}Interrupted.${RESET}"
+  fi
+  wait 2>/dev/null   # let background du jobs finish before deleting their temp dir
+  _cleanup
+  exit 130
+}
+
+# Returns 0 (and says so) when --dry-run should block a destructive action.
+_dry_block() {
+  [ "$DRY_RUN" -eq 1 ] || return 1
+  info "Dry run: $1 — nothing changed"
+  return 0
 }
 
 # Volume that holds user data. Since Catalina, "/" is the small read-only
@@ -103,6 +147,10 @@ confirm() {
 _rm_tracked() {
   local path="$1" before="${2:-0}" left
   if [ -z "$path" ] || [ ! -e "$path" ]; then echo 0; return 1; fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo -e "  ${DIM}[dry run] would delete: $path${RESET}" >&2
+    echo "$before"; return 0
+  fi
   rm -rf "$path" 2>/dev/null
   if [ -e "$path" ]; then
     left=$(du -sk "$path" 2>/dev/null | cut -f1); left=${left:-0}
@@ -121,11 +169,40 @@ press_any_key() { echo ""; echo -ne "  ${DIM}Press any key to continue...${RESET
 # ══════════════════════════════════════════════════════════════
 #   MAIN MENU
 # ══════════════════════════════════════════════════════════════
+# The menu is a loop: every feature function simply returns to it (via
+# _back_to_menu or a plain `return`). Features must not call main_menu
+# themselves — that recursion grew the call stack for the whole session.
 main_menu() {
+  local choice
+  while true; do
+    _main_menu_draw
+    # EOF on stdin (closed pipe, Ctrl-D) would otherwise spin this loop forever.
+    read -r choice || { echo ""; exit 0; }
+    case "$choice" in
+      1) full_audit ;;       2) storage_visualizer ;;
+      3) find_large_files ;; 4) cloud_audit ;;
+      5) ai_tools_audit ;;   6) app_support_deep ;;
+      7) safe_wizard ;;      8) quick_clean ;;
+      9) interactive_clean ;;10) time_machine_manager ;;
+      11) applications_manager ;; 12) vscode_manager ;;
+      13) lmstudio_manager ;; 14) ollama_manager ;;
+      15) save_report ;;     16) generate_feedback ;;
+      0)
+        local free_now; free_now=$(df -h "$DATA_VOL" | awk 'NR==2{print $4}')
+        echo -e "\n  ${BGREEN}Goodbye! 👋 Free space now: ${BYELLOW}${free_now}${RESET}\n"
+        exit 0
+        ;;
+      "") ;;   # bare Enter just redraws
+      *) warning "Invalid option"; sleep 1 ;;
+    esac
+  done
+}
+
+_main_menu_draw() {
   clear
   echo ""
   echo -e "${BMAGENTA}╔══════════════════════════════════════════════════════════╗${RESET}"
-  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.6                         ║${RESET}"
+  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.7                         ║${RESET}"
   echo -e "${BMAGENTA}║     $(date '+%a %d %b %Y — %H:%M')                              ║${RESET}"
   echo -e "${BMAGENTA}╚══════════════════════════════════════════════════════════╝${RESET}"
   echo ""
@@ -133,6 +210,9 @@ main_menu() {
   _disk_stats
   echo -e "  ${BOLD}Disk:${RESET} ${DISK_COLOR}[$(_disk_bar_str 40)] ${DISK_PCT}%${RESET}"
   echo -e "  ${DIM}Used: ${DISK_USED}  |  Free: ${DISK_FREE}  |  Total: ${DISK_TOTAL}${RESET}"
+  [ "$DRY_RUN" -eq 1 ] && echo -e "  ${BYELLOW}🧪 DRY RUN — nothing will be deleted, moved or changed${RESET}"
+  [ "${NO_FDA:-0}" -eq 1 ] && echo -e "  ${DIM}⚠️  No Full Disk Access: some sizes undercount and Trash can't be emptied.${RESET}" \
+    && echo -e "  ${DIM}   Grant it: System Settings → Privacy & Security → Full Disk Access → your terminal.${RESET}"
   echo ""
   divider
 
@@ -164,23 +244,6 @@ main_menu() {
   printf "  ${BOLD}%2d)${RESET} %-28s\n" 0 "❌ Exit"
   divider
   echo -ne "\n  ${BCYAN}Choose an option: ${RESET}"
-  read -r choice
-  case "$choice" in
-    1) full_audit ;;       2) storage_visualizer ;;
-    3) find_large_files ;; 4) cloud_audit ;;
-    5) ai_tools_audit ;;   6) app_support_deep ;;
-    7) safe_wizard ;;      8) quick_clean ;;
-    9) interactive_clean ;;10) time_machine_manager ;;
-    11) applications_manager ;; 12) vscode_manager ;;
-    13) lmstudio_manager ;; 14) ollama_manager ;;
-    15) save_report ;;     16) generate_feedback ;;
-    0)
-      local free_now=$(df -h "$DATA_VOL" | awk 'NR==2{print $4}')
-      echo -e "\n  ${BGREEN}Goodbye! 👋 Free space now: ${BYELLOW}${free_now}${RESET}\n"
-      exit 0
-      ;;
-    *) warning "Invalid option"; sleep 1; main_menu ;;
-  esac
 }
 
 # ══════════════════════════════════════════════════════════════
@@ -221,7 +284,7 @@ _wiz_protected() {
 
 _wizard_header() {
   clear
-  echo -e "${BGREEN}${BOLD}🪄  SAFE CLEANUP WIZARD${RESET}  ${DIM}(v3.6 pattern engine)${RESET}"
+  echo -e "${BGREEN}${BOLD}🪄  SAFE CLEANUP WIZARD${RESET}  ${DIM}(v3.7 pattern engine)${RESET}"
   divider
   echo -e "  Offers only items that are ${BGREEN}safe by design${RESET}: caches, logs, temp & re-downloadables."
   echo -e "  It ${BRED}never${RESET} touches macOS system data, cloud sync, chats, mail, or your files."
@@ -265,7 +328,7 @@ safe_wizard() {
       a|A) _wizard_auto_safe; return ;;
       p|P) _wizard_pick; return ;;
       l|L) _wizard_list; _wizard_header ;;
-      b|B|q|Q) main_menu; return ;;
+      b|B|q|Q) return ;;
       *) warning "Invalid option — try one of the keys shown"; sleep 1; _wizard_header ;;
     esac
   done
@@ -387,7 +450,7 @@ _wizard_auto_safe() {
   done
 
   if ! confirm "Delete ALL 🟢 safe items ($(human_kb $total))? This is reversible-safe (apps rebuild them)"; then
-    main_menu; return
+    return
   fi
 
   echo ""
@@ -782,7 +845,8 @@ ollama_manager() {
     done < <(ollama list 2>/dev/null | tail -n +2)
     for ((k=0; k<${#o_names[@]}; k++)); do
       if confirm "Remove model ${o_names[$k]} (${o_sizes[$k]})?"; then
-        if ollama rm "${o_names[$k]}" >/dev/null 2>&1; then
+        if _dry_block "ollama rm ${o_names[$k]}"; then :
+        elif ollama rm "${o_names[$k]}" >/dev/null 2>&1; then
           success "Removed ${o_names[$k]}"
         else
           danger "Could not remove ${o_names[$k]} (is the Ollama server running?)"
@@ -901,7 +965,7 @@ find_large_files() {
 # so both renderers below share one dataset. Written to a temp file
 # since Bash 3.2 has no associative arrays.
 _viz_collect() {
-  local tmp; tmp=$(mktemp)
+  local tmp; _mktemp tmp || return
   { du -sk ~/* ~/.[^.]* 2>/dev/null; [ -d /Applications ] && du -sk /Applications 2>/dev/null; } | \
     awk -F'\t' '{n=split($2,parts,"/"); print $1"\t"parts[n]}' | sort -rn > "$tmp"
 
@@ -1036,7 +1100,8 @@ _print_recommendations() {
   [ "$found" -eq 0 ] && success "Looks clean! 🎉"
 }
 
-_back_to_menu() { echo ""; echo -ne "  ${DIM}Press any key to return to menu...${RESET}"; read -rn1; main_menu; }
+# Waits for a key, then returns — the caller returns into main_menu's loop.
+_back_to_menu() { echo ""; echo -ne "  ${DIM}Press any key to return to menu...${RESET}"; read -rn1; }
 
 # ══════════════════════════════════════════════════════════════
 #   16) GENERATE FEEDBACK FILE FOR CLAUDE CODE
@@ -1108,7 +1173,7 @@ generate_feedback() {
     echo ""
     echo "- Generated: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "- Host: $(hostname)"
-    echo "- Generator: storage_check.sh v3.6"
+    echo "- Generator: storage_check.sh v3.7"
     echo ""
     echo "---"
     echo ""
@@ -1350,8 +1415,9 @@ time_machine_manager() {
     info "$snap_count snapshot(s) found — safe to delete, macOS recreates them automatically"
     echo ""
     if confirm "Delete ALL local Time Machine snapshots?"; then
-      tmutil deletelocalsnapshots / 2>/dev/null && success "All local snapshots deleted" \
-        || warning "Could not delete snapshots (may require Full Disk Access)"
+      if _dry_block "snapshot deletion"; then :
+      elif tmutil deletelocalsnapshots / 2>/dev/null; then success "All local snapshots deleted"
+      else warning "Could not delete snapshots (may require Full Disk Access)"; fi
     fi
   fi
 
@@ -1422,8 +1488,6 @@ applications_manager() {
       *) warning "Invalid option — try one of the keys shown"; sleep 1 ;;
     esac
   done
-
-  main_menu
 }
 
 # ── Scan every .app once into the cache, with a live progress counter ──
@@ -1478,7 +1542,7 @@ _apps_scan() {
   # Pass 2 — sizes. `du` here is I/O-bound (external volumes especially),
   # so run it in small parallel batches: roughly halves the wait versus a
   # serial loop. Results land in one file per index.
-  local work; work=$(mktemp -d 2>/dev/null) || work=""
+  local work=""; _mktemp work -d || work=""
   if [ -n "$work" ]; then
     local i
     for ((i=1; i<=APP_N; i++)); do
@@ -1637,6 +1701,7 @@ _apps_result() {
 # ══════════════════════════════════════════════════════════════
 _delete_apps_multi() {
   section "🗑️  Delete apps"
+  if _dry_block "deleting apps"; then press_any_key; return; fi
   local n=${#VIS[@]}
   if [ "$n" -eq 0 ]; then
     info "No apps in the current view."; press_any_key; return
@@ -1778,6 +1843,7 @@ _external_volumes() {
 # ══════════════════════════════════════════════════════════════
 _move_app_to_usb() {
   section "🔌 Move App to USB / External Drive"
+  if _dry_block "moving apps"; then press_any_key; return; fi
   local n=${#VIS[@]}
   if [ "$n" -eq 0 ]; then
     info "No apps in the current view."; press_any_key; return
@@ -1880,6 +1946,7 @@ _move_app_to_usb() {
     local app_name; app_name=$(basename "$app")
     local dest="$dest_dir/$app_name"
     local app_kb; app_kb=$(du -sk "$app" 2>/dev/null | cut -f1); app_kb=${app_kb:-0}
+    PENDING_MSG=""
 
     local use_sudo=0
     if ! _app_removable "$app"; then
@@ -1899,6 +1966,7 @@ _move_app_to_usb() {
       if confirm "Overwrite it with a fresh copy from the internal disk? (n = decide next)"; then
         rm -rf "$dest"
       elif [ "$dest_size" -gt 0 ] && confirm "Use the EXISTING external copy instead, and free the internal one? (it may be older)"; then
+        PENDING_MSG="'$app_name' is safe at: $dest — open Applications → [x] relink to recreate its launcher."
         rm -rf "$app"
         if [ -e "$app" ]; then
           danger "Could not fully remove '$app_name' — restoring it from the external copy."
@@ -1928,6 +1996,7 @@ _move_app_to_usb() {
       continue
     fi
 
+    PENDING_MSG="'$app_name' is safe at: $dest — open Applications → [x] relink to recreate its launcher."
     if [ "$use_sudo" -eq 1 ]; then
       info "Removing '$app_name' with admin rights (you may be asked for your password)..."
       sudo rm -rf "$app"
@@ -1961,6 +2030,7 @@ _move_app_to_usb() {
     success "Moved '$app_name' — freed $(human_kb "$app_kb") on internal disk"
     ok_n=$((ok_n+1)); freed_kb=$((freed_kb+app_kb))
   done
+  PENDING_MSG=""
 
   _apps_result "$ok_n" "$skip_n" "$fail_n" "$freed_kb"
 }
@@ -1970,6 +2040,7 @@ _move_app_to_usb() {
 # ══════════════════════════════════════════════════════════════
 _restore_app_from_usb() {
   section "🔄 Restore App from USB / External Drive"
+  if _dry_block "restoring apps"; then press_any_key; return; fi
 
   # Externally-hosted apps come from the cached scan (renumbered here,
   # since this is a subset of the main list).
@@ -2026,6 +2097,7 @@ _restore_app_from_usb() {
     fi
 
     local restore_path="$app"
+    PENDING_MSG="'$app_name' is still complete at: $target — delete any partial copy at '$app', then open Applications → [x] relink."
     rm -f "$app"
     echo -n "  Copying '$app_name' back to internal disk... "
     if ditto "$target" "$restore_path" 2>/dev/null && [ -d "$restore_path" ] && [ -n "$(ls -A "$restore_path" 2>/dev/null)" ]; then
@@ -2035,10 +2107,12 @@ _restore_app_from_usb() {
       danger "Restore failed for '$app_name' — re-linking to external copy so it stays usable."
       rm -rf "$restore_path" 2>/dev/null
       ln -s "$target" "$restore_path"
+      PENDING_MSG=""
       fail_n=$((fail_n+1))
       continue
     fi
 
+    PENDING_MSG=""
     success "Restored '$app_name' to internal disk"
     ok_n=$((ok_n+1))
     if confirm "Delete the external copy at '$target'?"; then
@@ -2058,6 +2132,7 @@ _restore_app_from_usb() {
 # ══════════════════════════════════════════════════════════════
 _relink_missing_apps() {
   section "🔗 Relink Apps with Missing Launcher"
+  if _dry_block "relinking apps"; then press_any_key; return; fi
 
   local vols; vols=$(_external_volumes)
   if [ -z "$vols" ]; then
@@ -2258,5 +2333,59 @@ vscode_manager() {
   _back_to_menu
 }
 
-# ── Entry ─────────────────────────────────────────────────────
-main_menu
+# ══════════════════════════════════════════════════════════════
+#   ENTRY
+# ══════════════════════════════════════════════════════════════
+VERSION="3.7"
+
+_usage() {
+  cat <<USAGE
+storage_check.sh v$VERSION — macOS disk audit & safe cleanup
+
+Usage: bash storage_check.sh [options]
+
+  -n, --dry-run   Show what would be deleted/moved; change nothing
+  -h, --help      Show this help
+  -v, --version   Print the version
+USAGE
+}
+
+_parse_args() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -n|--dry-run) DRY_RUN=1 ;;
+      -h|--help)    _usage; exit 0 ;;
+      -v|--version) echo "storage_check.sh v$VERSION"; exit 0 ;;
+      *) echo "Unknown option: $1" >&2; _usage >&2; exit 2 ;;
+    esac
+    shift
+  done
+}
+
+# Refuses unsupported environments and detects missing Full Disk Access.
+_preflight() {
+  if [ "$(uname -s)" != "Darwin" ]; then
+    echo "storage_check.sh only supports macOS." >&2; exit 1
+  fi
+  if [ "$(id -u)" -eq 0 ]; then
+    echo "Don't run storage_check.sh as root or with sudo — it manages YOUR home folder" >&2
+    echo "and asks for admin rights itself only where needed." >&2
+    exit 1
+  fi
+  # FDA-protected folders that exist on every Mac. If one exists but can't
+  # be listed, the terminal lacks Full Disk Access (no prompt is triggered).
+  NO_FDA=0
+  local d
+  for d in "$HOME/Library/Safari" "$HOME/Library/Mail"; do
+    if [ -d "$d" ] && ! ls "$d" >/dev/null 2>&1; then NO_FDA=1; break; fi
+  done
+}
+
+# Run only when executed, not when sourced (tests source this file).
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  _parse_args "$@"
+  _preflight
+  trap _on_interrupt INT TERM
+  trap _cleanup EXIT
+  main_menu
+fi
