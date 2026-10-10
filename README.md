@@ -25,7 +25,7 @@ The menu is grouped into four sections. All ANALYZE screens are read-only.
 - **Time Machine & Backups**: local APFS snapshots and iPhone/iPad backups (shown by device name and last backup date)
 
 ### 📦 Manage
-- **Applications**: paged, sortable, filterable list of every app with sizes. Move apps to the Trash and **clean up their leftover data** (settings, caches, containers), **move them to a USB/external drive** (leaving a launcher link), restore them, or relink apps whose launcher is missing
+- **Applications**: paged, sortable list of every app with its size, when it was last opened, and whether it's running. Single-key controls (←/→ to page). Filter by name, minimum size, last used (unused 30/90/180 days+), state (removable / admin / external / drive offline / protected) and running. Sizes are cached between runs (`~/Library/Caches/storageCheck/apps.tsv`), so only new or updated apps get re-measured. Move apps to the Trash and **clean up their leftover data** (settings, caches, containers), **move them to a USB/external drive** (leaving a launcher link), restore them, or relink apps whose launcher is missing
 - **VSCode Extensions**: VS Code, Cursor, Windsurf, VSCodium and other forks: browse, delete, back up to Desktop
 - **LM Studio** / **Ollama**: model inventory with per-model deletion
 

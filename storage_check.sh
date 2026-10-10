@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║      MAC STORAGE MANAGER v3.8 — by Claude                    ║
+# ║      MAC STORAGE MANAGER v3.9 — by Claude                    ║
 # ║      Audit · Analyze · Clean · Report · Wizard · Feedback    ║
 # ╚══════════════════════════════════════════════════════════════╝
 
@@ -87,6 +87,9 @@ _dry_block() {
 # system volume, so `df /` under-reports usage (e.g. 22% vs a real 77%).
 # Free space is shared across the APFS container, but Used/% are not.
 DATA_VOL="/System/Volumes/Data"; [ -d "$DATA_VOL" ] || DATA_VOL="/"
+
+# Applications Manager size cache: "<bundle path>\t<Info.plist mtime>\t<kb>".
+APPS_CACHE="$HOME/Library/Caches/storageCheck/apps.tsv"
 
 # Fills DISK_PCT / DISK_USED / DISK_FREE / DISK_TOTAL / DISK_COLOR from df.
 _disk_stats() {
@@ -253,7 +256,7 @@ _running_snapshot() {
     bn=$(plutil -extract CFBundleName raw "$info" 2>/dev/null)
     bid=$(plutil -extract CFBundleIdentifier raw "$info" 2>/dev/null)
     RUNNING="$RUNNING$(printf '%s|%s|%s|' "$nm" "$bn" "$bid" | tr '[:upper:]' '[:lower:]' | sed 's/||*/|/g')"
-  done < <(ps -axo comm= 2>/dev/null | awk '{ i=index($0, ".app/"); if (i) print substr($0, 1, i+3) }' | sort -u)
+  done < <(_running_app_paths)
 }
 
 # True if the app owning a ~/Library cache/log/state path is running
@@ -316,7 +319,7 @@ _main_menu_draw() {
   clear
   echo ""
   echo -e "${BMAGENTA}╔══════════════════════════════════════════════════════════╗${RESET}"
-  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.8                         ║${RESET}"
+  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.9                         ║${RESET}"
   echo -e "${BMAGENTA}║     $(date '+%a %d %b %Y — %H:%M')                              ║${RESET}"
   echo -e "${BMAGENTA}╚══════════════════════════════════════════════════════════╝${RESET}"
   echo ""
@@ -398,7 +401,7 @@ _wiz_protected() {
 
 _wizard_header() {
   clear
-  echo -e "${BGREEN}${BOLD}🪄  SAFE CLEANUP WIZARD${RESET}  ${DIM}(v3.8 pattern engine)${RESET}"
+  echo -e "${BGREEN}${BOLD}🪄  SAFE CLEANUP WIZARD${RESET}  ${DIM}(v3.9 pattern engine)${RESET}"
   divider
   echo -e "  Offers only items that are ${BGREEN}safe by design${RESET}: caches, logs, temp & re-downloadables."
   echo -e "  It ${BRED}never${RESET} touches macOS system data, cloud sync, chats, mail, or your files."
@@ -1356,7 +1359,7 @@ generate_feedback() {
     echo ""
     echo "- Generated: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "- Host: $(hostname)"
-    echo "- Generator: storage_check.sh v3.8"
+    echo "- Generator: storage_check.sh v3.9"
     echo ""
     echo "---"
     echo ""
@@ -1635,30 +1638,40 @@ time_machine_manager() {
 #   globals so the sub-actions (delete/move/restore) can reuse the scan
 #   and the on-screen numbering instead of re-walking the disk:
 #
-#     APP_PATH/NAME/KB/LOC/STATE/TARGET[1..APP_N]  the cache
-#     VIS[]        visible rows after scope+filter+sort; row number N
+#     APP_PATH/NAME/LNAME/KB/LOC/STATE/TARGET[1..APP_N]  the cache
+#     APP_USED[]   days since last opened (-1 no Spotlight record, -2 unknown)
+#     APP_RUN[]    1 if the app is running (refreshed every redraw)
+#     APPS_F_*     filters: NAME, MINKB, USED (days), STATE, RUN
+#     VIS[]        visible rows after scope+filters+sort; row number N
 #                  on screen is VIS[N-1]
 #     APPS_DIRTY   set by any action that changed the disk -> rescan
 #
+#   Sizes persist in $APPS_CACHE between runs, keyed by bundle path and
+#   the mtime of its Info.plist, so only new or updated apps are re-sized.
+#
 applications_manager() {
-  APPS_PAGE=1; APPS_SORT="size_desc"; APPS_FILTER=""; APPS_SCOPE="all"; APPS_DIRTY=0
+  APPS_PAGE=1; APPS_SORT="size_desc"; APPS_SCOPE="all"; APPS_DIRTY=0
+  _apps_clear_filters
   _apps_scan
 
-  local am_loop=1 am_choice
+  local am_loop=1
   while [ "$am_loop" -eq 1 ]; do
     if [ "$APPS_DIRTY" -eq 1 ]; then APPS_DIRTY=0; _apps_scan; fi
+    _apps_running
     _apps_view
     _apps_screen
-    ask_choice "[d]elete [m]ove [r]estore [x]relink · [n/p]age [/]filter [s]ort [t]scope [R]escan · [b]ack"
-    read -r am_choice
-    case "$am_choice" in
-      n|N) [ "$APPS_PAGE" -lt "$APPS_PAGES" ] && APPS_PAGE=$((APPS_PAGE+1)) ;;
-      p|P) [ "$APPS_PAGE" -gt 1 ] && APPS_PAGE=$((APPS_PAGE-1)) ;;
-      /)   echo -ne "\n  ${BCYAN}Filter by name ${DIM}(blank clears)${RESET}${BCYAN}: ${RESET}"
-           read -r APPS_FILTER; APPS_PAGE=1 ;;
+    _apps_keybar
+    _read_key || break
+    case "$KEY" in
+      n|N|right|down) [ "$APPS_PAGE" -lt "$APPS_PAGES" ] && APPS_PAGE=$((APPS_PAGE+1)) ;;
+      p|P|left|up)    [ "$APPS_PAGE" -gt 1 ] && APPS_PAGE=$((APPS_PAGE-1)) ;;
+      /)   echo ""; _apps_prompt_name ;;
+      f|F) _apps_filter_panel ;;
+      c|C) _apps_clear_filters; APPS_PAGE=1 ;;
       s|S) case "$APPS_SORT" in
              size_desc) APPS_SORT="size_asc" ;;
              size_asc)  APPS_SORT="name" ;;
+             name)      if [ "$APPS_USED_OK" -eq 1 ]; then APPS_SORT="used"; else APPS_SORT="size_desc"; fi ;;
              *)         APPS_SORT="size_desc" ;;
            esac; APPS_PAGE=1 ;;
       t|T) case "$APPS_SCOPE" in
@@ -1666,28 +1679,136 @@ applications_manager() {
              sys) APPS_SCOPE="usr" ;;
              *)   APPS_SCOPE="all" ;;
            esac; APPS_PAGE=1 ;;
-      R)   _apps_scan; APPS_PAGE=1 ;;
-      d|D) _delete_apps_multi ;;
-      m|M) _move_app_to_usb ;;
-      r)   _restore_app_from_usb ;;
-      x|X) _relink_missing_apps ;;
-      b|B|q|Q) am_loop=0 ;;
+      R)   [ -f "$APPS_CACHE" ] && rm -f "$APPS_CACHE"; _apps_scan; APPS_PAGE=1 ;;
+      d|D) echo ""; _delete_apps_multi ;;
+      m|M) echo ""; _move_app_to_usb ;;
+      r)   echo ""; _restore_app_from_usb ;;
+      x|X) echo ""; _relink_missing_apps ;;
+      b|B|q|Q|esc) am_loop=0 ;;
       "") ;;   # bare Enter just redraws
-      *) warning "Invalid option — try one of the keys shown"; sleep 1 ;;
+      *) echo ""; warning "Invalid key — try one of the keys shown"; sleep 1 ;;
     esac
   done
+}
+
+# One keypress into KEY, no Enter needed. Arrow keys come back as
+# left/right/up/down, a lone Esc as "esc", Enter as "". Returns 1 on EOF.
+_read_key() {
+  KEY=""
+  IFS= read -rsn1 KEY || { KEY=""; return 1; }
+  if [ "$KEY" = $'\e' ]; then
+    local rest=""
+    IFS= read -rsn2 -t 1 rest   # integer timeout: Bash 3.2 has no fractions
+    case "$rest" in
+      "[A") KEY="up" ;; "[B") KEY="down" ;; "[C") KEY="right" ;; "[D") KEY="left" ;;
+      *)    KEY="esc" ;;
+    esac
+  fi
+  return 0
+}
+
+_apps_clear_filters() {
+  APPS_F_NAME=""; APPS_F_MINKB=0; APPS_F_USED=0; APPS_F_STATE="any"; APPS_F_RUN="any"
+}
+
+_apps_prompt_name() {
+  echo -ne "  ${BCYAN}Name contains ${DIM}(blank clears)${RESET}${BCYAN}: ${RESET}"
+  read -r APPS_F_NAME; APPS_PAGE=1
+}
+
+# "500M", "1.5G", "800K", "200" (MB) -> KB on stdout; returns 1 if unparseable.
+_parse_size_kb() {
+  local s; s=$(printf '%s' "$1" | tr -d ' ' | tr '[:lower:]' '[:upper:]')
+  [ -n "$s" ] || return 1
+  awk -v s="$s" 'BEGIN {
+    if (!match(s, /^[0-9]+(\.[0-9]+)?/)) exit 1
+    n = substr(s, 1, RLENGTH) + 0; u = substr(s, RLENGTH + 1); sub(/B$/, "", u)
+    if (u == "" || u == "M") k = n * 1024
+    else if (u == "G") k = n * 1048576
+    else if (u == "K") k = n
+    else exit 1
+    printf "%d\n", k }'
+}
+
+# Human labels for the filter values (screen header + filter panel).
+_apps_state_label() {
+  case "$1" in
+    ok) echo "removable" ;; admin) echo "admin-installed" ;; ext) echo "on external drive" ;;
+    offline) echo "drive offline" ;; lock) echo "protected" ;; *) echo "any" ;;
+  esac
+}
+_apps_filter_summary() {
+  local s="" sep=" · "
+  [ -n "$APPS_F_NAME" ]        && s="$s${sep}\"$APPS_F_NAME\""
+  [ "$APPS_F_MINKB" -gt 0 ]    && s="$s${sep}≥$(human_kb "$APPS_F_MINKB")"
+  [ "$APPS_F_USED" -gt 0 ]     && s="$s${sep}unused ${APPS_F_USED}d+"
+  [ "$APPS_F_USED" -eq -1 ]    && s="$s${sep}no usage record"
+  [ "$APPS_F_STATE" != "any" ] && s="$s${sep}$(_apps_state_label "$APPS_F_STATE")"
+  case "$APPS_F_RUN" in yes) s="$s${sep}running" ;; no) s="$s${sep}not running" ;; esac
+  printf '%s' "${s#$sep}"
+}
+
+# ── Filter panel: one key per filter, redraws in place ─────────
+_apps_filter_panel() {
+  local fp_loop=1 v kb used_note
+  while [ "$fp_loop" -eq 1 ]; do
+    clear
+    section "🔎 FILTERS"
+    used_note=""
+    [ "$APPS_USED_OK" -eq 1 ] || used_note="  ${DIM}(unavailable: Spotlight has no usage data)${RESET}"
+    printf "  ${BCYAN}[/]${RESET} name contains   %s\n" "${APPS_F_NAME:-any}"
+    if [ "$APPS_F_MINKB" -gt 0 ]; then v="≥ $(human_kb "$APPS_F_MINKB")"; else v="any"; fi
+    printf "  ${BCYAN}[z]${RESET} minimum size    %s\n" "$v"
+    case "$APPS_F_USED" in
+      0)  v="any" ;;
+      -1) v="no usage record (Spotlight never logged a launch)" ;;
+      *)  v="not opened in ${APPS_F_USED}+ days" ;;
+    esac
+    printf "  ${BCYAN}[u]${RESET} last used       %s%b\n" "$v" "$used_note"
+    printf "  ${BCYAN}[e]${RESET} state           %s\n" "$(_apps_state_label "$APPS_F_STATE")"
+    case "$APPS_F_RUN" in yes) v="running only" ;; no) v="not running" ;; *) v="any" ;; esac
+    printf "  ${BCYAN}[o]${RESET} running         %s\n" "$v"
+    echo ""
+    echo -ne "  ${DIM}[c] clear all · Enter or [b] back to the list${RESET} ${BCYAN}›${RESET} "
+    _read_key || break
+    case "$KEY" in
+      /)   echo ""; _apps_prompt_name ;;
+      z|Z) echo ""
+           echo -ne "  ${BCYAN}Minimum size ${DIM}(e.g. 500M, 1G; blank clears)${RESET}${BCYAN}: ${RESET}"
+           read -r v
+           if [ -z "$v" ]; then APPS_F_MINKB=0
+           elif kb=$(_parse_size_kb "$v"); then APPS_F_MINKB=$kb
+           else warning "Not a size: $v"; sleep 1; fi ;;
+      u|U) if [ "$APPS_USED_OK" -ne 1 ]; then
+             echo ""; warning "Spotlight has no last-used dates on this Mac"; sleep 1
+           else
+             case "$APPS_F_USED" in
+               0) APPS_F_USED=30 ;; 30) APPS_F_USED=90 ;; 90) APPS_F_USED=180 ;; 180) APPS_F_USED=-1 ;; *) APPS_F_USED=0 ;;
+             esac
+           fi ;;
+      e|E) case "$APPS_F_STATE" in
+             any) APPS_F_STATE="ok" ;; ok) APPS_F_STATE="admin" ;; admin) APPS_F_STATE="ext" ;;
+             ext) APPS_F_STATE="offline" ;; offline) APPS_F_STATE="lock" ;; *) APPS_F_STATE="any" ;;
+           esac ;;
+      o|O) case "$APPS_F_RUN" in any) APPS_F_RUN="yes" ;; yes) APPS_F_RUN="no" ;; *) APPS_F_RUN="any" ;; esac ;;
+      c|C) _apps_clear_filters ;;
+      ""|b|B|q|Q|esc) fp_loop=0 ;;
+    esac
+  done
+  APPS_PAGE=1
 }
 
 # ── Scan every .app once into the cache, with a live progress counter ──
 _apps_scan() {
   clear
   section "📱 APPLICATIONS MANAGER"
-  APP_PATH=(); APP_NAME=(); APP_KB=(); APP_LOC=(); APP_STATE=(); APP_TARGET=()
-  APP_N=0
+  APP_PATH=(); APP_NAME=(); APP_LNAME=(); APP_KB=(); APP_LOC=(); APP_STATE=(); APP_TARGET=()
+  APP_USED=(); APP_RUN=()
+  APP_N=0; APPS_USED_OK=0
 
   local -a raw
   local app
-  for app in /Applications/*.app "$HOME/Applications"/*.app; do
+  for app in "${APPS_SYS_DIR:-/Applications}"/*.app "$HOME/Applications"/*.app; do
     { [ -e "$app" ] || [ -L "$app" ]; } || continue
     raw+=("$app")
   done
@@ -1727,48 +1848,202 @@ _apps_scan() {
   done
   APP_N=$((idx-1))
 
-  # Pass 2 — sizes, in parallel (du is I/O-bound, external volumes
-  # especially). DU_PATHS is 0-based; the cache is 1-based.
-  local i
-  DU_PATHS=()
-  for ((i=1; i<=APP_N; i++)); do DU_PATHS[$((i-1))]="${measure[$i]}"; done
-  _du_batch "apps"
-  for ((i=1; i<=APP_N; i++)); do APP_KB[$i]=${DU_KB[$((i-1))]:-0}; done
+  # Lowercased names in one pass, so the name filter needs no forks.
+  local i=1 ln
+  while IFS= read -r ln; do APP_LNAME[$i]="$ln"; i=$((i+1)); done \
+    < <(printf '%s\n' "${APP_NAME[@]}" | tr '[:upper:]' '[:lower:]')
+
+  _apps_sizes
+  _apps_last_used
 }
 
-# ── Rebuild VIS from the cache: scope filter, name filter, sort order ──
+# Pass 2 — sizes. Reads measure[] from _apps_scan. A row is re-sized only
+# if its bundle is missing from $APPS_CACHE or its Info.plist changed
+# (app updated); the rest come from the cache. Re-sizing runs in parallel
+# through _du_batch. Any cache problem just means a full re-size.
+_apps_sizes() {
+  local i k kb st
+  local -a plists stamp
+  for ((i=1; i<=APP_N; i++)); do
+    [ -n "${measure[$i]}" ] && plists+=("${measure[$i]}/Contents/Info.plist")
+  done
+
+  # Per row: "<kb or ?><TAB><stamp>", in row order.
+  i=1
+  while IFS='	' read -r kb st; do
+    APP_KB[$i]=$kb; stamp[$i]=$st; i=$((i+1))
+  done < <(
+    { for ((k=1; k<=APP_N; k++)); do printf '%s\n' "${measure[$k]}"; done
+      echo "--STAMP--"
+      [ "${#plists[@]}" -gt 0 ] && stat -f '%m	%N' "${plists[@]}" 2>/dev/null
+      echo "--CACHE--"
+      [ -f "$APPS_CACHE" ] && cat "$APPS_CACHE" 2>/dev/null
+    } | awk -F'\t' '
+      $0 == "--STAMP--" { ph = 1; next }
+      $0 == "--CACHE--" { ph = 2; next }
+      ph == 0 { order[++n] = $0; next }
+      ph == 1 { p = $2; sub(/\/Contents\/Info\.plist$/, "", p); st[p] = $1; next }
+      NF == 3 && $3 ~ /^[0-9]+$/ { cst[$1] = $2; ckb[$1] = $3 }
+      END {
+        for (i = 1; i <= n; i++) {
+          p = order[i]
+          if (p == "") { print "0\t"; continue }
+          s = (p in st) ? st[p] : ""
+          if (s != "" && (p in cst) && cst[p] == s) print ckb[p] "\t" s
+          else print "?\t" s
+        }
+      }')
+
+  # Re-size whatever the cache could not answer.
+  local -a map
+  DU_PATHS=()
+  for ((i=1; i<=APP_N; i++)); do
+    if [ "${APP_KB[$i]}" = "?" ] || [ -z "${APP_KB[$i]}" ]; then
+      APP_KB[$i]=0
+      [ -n "${measure[$i]}" ] || continue
+      map[${#DU_PATHS[@]}]=$i
+      DU_PATHS[${#DU_PATHS[@]}]="${measure[$i]}"
+    fi
+  done
+  if [ "${#DU_PATHS[@]}" -gt 0 ]; then
+    _du_batch "apps"
+    for ((k=0; k<${#DU_PATHS[@]}; k++)); do APP_KB[${map[$k]}]=${DU_KB[$k]:-0}; done
+  fi
+
+  # Rewrite the cache (temp file + mv, so a crash never leaves half a file).
+  local dir="${APPS_CACHE%/*}"
+  mkdir -p "$dir" 2>/dev/null || return 0
+  {
+    for ((i=1; i<=APP_N; i++)); do
+      [ -n "${measure[$i]}" ] && [ -n "${stamp[$i]}" ] || continue
+      printf '%s\t%s\t%s\n' "${measure[$i]}" "${stamp[$i]}" "${APP_KB[$i]}"
+    done
+  } > "$APPS_CACHE.$$" 2>/dev/null && mv -f "$APPS_CACHE.$$" "$APPS_CACHE" 2>/dev/null
+  [ -f "$APPS_CACHE.$$" ] && rm -f "$APPS_CACHE.$$"
+  return 0
+}
+
+# Days since each app was last opened, from ONE mdls call over every
+# reachable bundle. mdls stops at the first missing path, so only existing
+# ones are passed. If no app has a date at all, Spotlight is off or not
+# indexed: APPS_USED_OK=0 and the column shows "?".
+_apps_last_used() {
+  local i k=0 d
+  local -a lp li
+  APPS_USED_OK=0
+  for ((i=1; i<=APP_N; i++)); do
+    APP_USED[$i]=-2
+    [ -n "${measure[$i]}" ] && [ -e "${measure[$i]}" ] || continue
+    lp+=("${measure[$i]}"); li+=("$i")
+  done
+  [ "${#lp[@]}" -eq 0 ] && return
+  local today=$(( $(date -u +%s) / 86400 ))
+  while IFS= read -r d; do
+    [ "$k" -lt "${#li[@]}" ] || break
+    APP_USED[${li[$k]}]=$d
+    [ "$d" -ge 0 ] && APPS_USED_OK=1
+    k=$((k+1))
+  done < <(mdls -raw -name kMDItemLastUsedDate "${lp[@]}" 2>/dev/null | tr '\0' '\n' | _days_since "$today")
+}
+
+# stdin: one "YYYY-MM-DD hh:mm:ss +0000" (or "(null)") per line.
+# stdout: days between that date and day $1 (days since 1970-01-01 UTC),
+# or -1 for no date (Spotlight never logged a launch — not proof of "never"). macOS awk has no mktime, so this is the plain
+# civil-date -> day-number formula.
+_days_since() {
+  awk -v t="$1" '
+    /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ {
+      y = substr($0, 1, 4) + 0; m = substr($0, 6, 2) + 0; d = substr($0, 9, 2) + 0
+      if (m <= 2) y--
+      era = int(y / 400); yoe = y - era * 400
+      doy = int((153 * ((m + 9) % 12) + 2) / 5) + d - 1
+      doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+      u = t - (era * 146097 + doe - 719468)
+      print (u < 0 ? 0 : u); next
+    }
+    { print -1 }'
+}
+
+# Full .app paths of running processes, one per line.
+_running_app_paths() {
+  ps -axo comm= 2>/dev/null | awk '{ i=index($0, ".app/"); if (i) print substr($0, 1, i+3) }' | sort -u
+}
+
+# Refresh APP_RUN[] (cheap: one ps). An app counts as running if a process
+# runs from its bundle or, for an external-drive launcher, from the target.
+_apps_running() {
+  local runs="|" p i
+  while IFS= read -r p; do runs="$runs$p|"; done < <(_running_app_paths)
+  for ((i=1; i<=APP_N; i++)); do
+    APP_RUN[$i]=0
+    case "$runs" in *"|${APP_PATH[$i]}|"*) APP_RUN[$i]=1; continue ;; esac
+    [ -n "${APP_TARGET[$i]}" ] && case "$runs" in *"|${APP_TARGET[$i]}|"*) APP_RUN[$i]=1 ;; esac
+  done
+}
+
+# State key for filtering/drawing: APP_STATE, with "ext" split by
+# whether the drive holding the bundle is connected.
+_apps_state_of() {
+  APPS_ST="${APP_STATE[$1]}"
+  if [ "$APPS_ST" = "ext" ] && { [ -z "${APP_TARGET[$1]}" ] || [ ! -e "${APP_TARGET[$1]}" ]; }; then
+    APPS_ST="offline"
+  fi
+}
+
+# ── Rebuild VIS from the cache: scope, filters, sort order ──────
 _apps_view() {
   VIS=()
-  local i rows="" sorted k n
+  local i rows="" sorted k n uk u lf=""
+  [ -n "$APPS_F_NAME" ] && lf=$(printf '%s' "$APPS_F_NAME" | tr '[:upper:]' '[:lower:]')
   for ((i=1; i<=APP_N; i++)); do
     case "$APPS_SCOPE" in
       sys) [ "${APP_LOC[$i]}" = "/App" ]  || continue ;;
       usr) [ "${APP_LOC[$i]}" = "~/App" ] || continue ;;
     esac
-    if [ -n "$APPS_FILTER" ]; then
-      echo "${APP_NAME[$i]}" | grep -qiF -- "$APPS_FILTER" || continue
+    if [ -n "$lf" ]; then
+      case "${APP_LNAME[$i]}" in *"$lf"*) ;; *) continue ;; esac
     fi
-    rows="$rows${APP_KB[$i]}	${APP_NAME[$i]}	$i
+    [ "$APPS_F_MINKB" -gt 0 ] && [ "${APP_KB[$i]:-0}" -lt "$APPS_F_MINKB" ] && continue
+    u=${APP_USED[$i]:--2}
+    if [ "$APPS_USED_OK" -eq 1 ]; then
+      # "unused N+ days" needs a real date; apps without a record have
+      # their own filter value (-1) rather than being guessed at.
+      if [ "$APPS_F_USED" -gt 0 ]; then
+        { [ "$u" -lt 0 ] || [ "$u" -lt "$APPS_F_USED" ]; } && continue
+      elif [ "$APPS_F_USED" -eq -1 ]; then
+        [ "$u" -eq -1 ] || continue
+      fi
+    fi
+    if [ "$APPS_F_STATE" != "any" ]; then
+      _apps_state_of "$i"; [ "$APPS_ST" = "$APPS_F_STATE" ] || continue
+    fi
+    case "$APPS_F_RUN" in
+      yes) [ "${APP_RUN[$i]:-0}" -eq 1 ] || continue ;;
+      no)  [ "${APP_RUN[$i]:-0}" -eq 1 ] && continue ;;
+    esac
+    uk=$u   # "last used" sort: oldest date first, then no record, then unknown
+    rows="$rows${APP_KB[$i]:-0}	${APP_LNAME[$i]}	$uk	$i
 "
   done
 
   if [ -n "$rows" ]; then
     case "$APPS_SORT" in
       size_asc) sorted=$(printf '%s' "$rows" | sort -t'	' -k1,1n) ;;
-      name)     sorted=$(printf '%s' "$rows" | sort -t'	' -k2,2f) ;;
+      name)     sorted=$(printf '%s' "$rows" | sort -t'	' -k2,2) ;;
+      used)     sorted=$(printf '%s' "$rows" | sort -t'	' -k3,3nr -k1,1nr) ;;
       *)        sorted=$(printf '%s' "$rows" | sort -t'	' -k1,1nr) ;;
     esac
-    while IFS='	' read -r k n i; do
+    while IFS='	' read -r k n uk i; do
       [ -n "$i" ] && VIS+=("$i")
     done <<< "$sorted"
   fi
 
   # Page geometry (recomputed each draw so window resizes are picked up).
   # chrome = box(4) + disk bar(1) + column header(1) + 3 dividers/page line(3)
-  #          + prompt(2) + 1 spare; the filter line adds one more.
+  #          + key bar(3) + 1 spare; the filter line adds one more.
   local lines; lines=$(_term_lines)
-  local chrome=12
-  [ -n "$APPS_FILTER" ] && chrome=13
+  local chrome=13
+  [ -n "$(_apps_filter_summary)" ] && chrome=14
   APPS_ROWS=$(( lines - chrome ))
   [ "$APPS_ROWS" -lt 5 ] && APPS_ROWS=5
   local count=${#VIS[@]}
@@ -1778,14 +2053,29 @@ _apps_view() {
   [ "$APPS_PAGE" -lt 1 ] && APPS_PAGE=1
 }
 
+# Last-used cell, padded to 6 visible columns (no forks).
+_used_cell() {
+  local u=$1 s c="$DIM"
+  if [ "$APPS_USED_OK" -ne 1 ] || [ "$u" -eq -2 ]; then s="?"
+  elif [ "$u" -eq -1 ]; then s="—"
+  elif [ "$u" -eq 0 ];  then s="today"
+  elif [ "$u" -lt 60 ]; then s="${u}d"
+  elif [ "$u" -lt 730 ]; then s="$((u/30))mo"
+  else s="$((u/365))y"; fi
+  [ "$u" -ge 180 ] && c="$BYELLOW"
+  # %-6s pads by bytes, and "—" is 3 bytes for 1 column
+  if [ "$s" = "—" ]; then printf "%b%s     %b" "$c" "$s" "$RESET"
+  else printf "%b%-6s%b" "$c" "$s" "$RESET"; fi
+}
+
 # ── Draw the whole screen ──────────────────────────────────────
 _apps_screen() {
   clear
   local count=${#VIS[@]}
   local i total_kb=0
-  for i in "${VIS[@]}"; do total_kb=$(( total_kb + ${APP_KB[$i]} )); done
+  for i in "${VIS[@]}"; do total_kb=$(( total_kb + ${APP_KB[$i]:-0} )); done
 
-  local scope_label sort_label
+  local scope_label sort_label fsum
   case "$APPS_SCOPE" in
     sys) scope_label="/Applications" ;;
     usr) scope_label="~/Applications" ;;
@@ -1794,8 +2084,10 @@ _apps_screen() {
   case "$APPS_SORT" in
     size_asc) sort_label="size (small first)" ;;
     name)     sort_label="name" ;;
+    used)     sort_label="last used (oldest)" ;;
     *)        sort_label="size (big first)" ;;
   esac
+  fsum=$(_apps_filter_summary)
 
   _disk_stats
   local left right pad
@@ -1808,8 +2100,10 @@ _apps_screen() {
   right="sort: $sort_label"
   pad=$(( 56 - ${#left} - ${#right} )); [ "$pad" -lt 1 ] && pad=1
   printf "${BMAGENTA}│${RESET} %s%*s%s ${BMAGENTA}│${RESET}\n" "$left" "$pad" "" "$right"
-  if [ -n "$APPS_FILTER" ]; then
-    printf "${BMAGENTA}│${RESET} %-56.56s ${BMAGENTA}│${RESET}\n" "filter: \"$APPS_FILTER\"  (press / and enter blank to clear)"
+  if [ -n "$fsum" ]; then
+    # pad by characters, not bytes: "·" and "≥" are multi-byte
+    left="filter: $fsum"; left="${left:0:56}"; pad=$(( 56 - ${#left} ))
+    printf "${BMAGENTA}│${RESET} ${BYELLOW}%s%*s${RESET} ${BMAGENTA}│${RESET}\n" "$left" "$pad" ""
   fi
   echo -e "${BMAGENTA}╰──────────────────────────────────────────────────────────╯${RESET}"
   echo -e "  ${DISK_COLOR}[$(_disk_bar_str 40)] ${DISK_PCT}%${RESET}"
@@ -1817,39 +2111,48 @@ _apps_screen() {
   if [ "$count" -eq 0 ]; then
     if [ "$APP_N" -eq 0 ]; then
       info "No applications found."
+    elif [ -n "$fsum" ]; then
+      info "No apps match: $fsum"
+      info "Press c to clear the filters, or f to change them."
     else
-      info "No apps match the current filter/scope."
+      info "No apps in this scope — press t to switch."
     fi
     echo ""
     divider
     return
   fi
 
-  echo -e "  ${DIM} #   SIZE      NAME                             LOC    STATE${RESET}"
+  printf "  ${DIM}%3s  %-8s %-6s  %-27s %-6s %s${RESET}\n" "#" "SIZE" "USED" "NAME" "LOC" "STATE"
   divider
 
   local start=$(( (APPS_PAGE - 1) * APPS_ROWS ))
   local end=$(( start + APPS_ROWS )); [ "$end" -gt "$count" ] && end=$count
-  local pos state_cell
+  local pos state_cell run_mark
   for ((pos=start; pos<end; pos++)); do
     i=${VIS[$pos]}
-    case "${APP_STATE[$i]}" in
-      lock)  state_cell="${BRED}🔒 protected${RESET}" ;;
-      admin) state_cell="${BYELLOW}⛨ admin${RESET}" ;;
-      ext)   if [ -n "${APP_TARGET[$i]}" ] && [ -e "${APP_TARGET[$i]}" ]; then
-               state_cell="${BCYAN}↗ external${RESET}"
-             else
-               state_cell="${BRED}↗ drive offline${RESET}"
-             fi ;;
-      *)     state_cell="${BGREEN}●${RESET}" ;;
+    _apps_state_of "$i"
+    case "$APPS_ST" in
+      lock)    state_cell="${BRED}🔒 protected${RESET}" ;;
+      admin)   state_cell="${BYELLOW}⛨ admin${RESET}" ;;
+      ext)     state_cell="${BCYAN}↗ external${RESET}" ;;
+      offline) state_cell="${BRED}↗ drive offline${RESET}" ;;
+      *)       state_cell="${BGREEN}●${RESET}" ;;
     esac
-    printf "  %2d  %s %-32.32s %-6s %b\n" \
-      "$((pos+1))" "$(_size_cell "${APP_KB[$i]}")" "${APP_NAME[$i]}" "${APP_LOC[$i]}" "$state_cell"
+    if [ "${APP_RUN[$i]:-0}" -eq 1 ]; then run_mark="${BGREEN}▶${RESET}"; else run_mark=" "; fi
+    printf "  %3d  %s %s %b%-27.27s %-6s %b\n" \
+      "$((pos+1))" "$(_size_cell "${APP_KB[$i]}")" "$(_used_cell "${APP_USED[$i]:--2}")" \
+      "$run_mark" "${APP_NAME[$i]}" "${APP_LOC[$i]}" "$state_cell"
   done
 
   divider
-  printf "  ${DIM}page %d/%d · showing %d-%d of %d${RESET}\n" \
+  printf "  ${DIM}page %d/%d · showing %d-%d of %d · ${RESET}${BGREEN}▶${RESET}${DIM} running${RESET}\n" \
     "$APPS_PAGE" "$APPS_PAGES" "$((start+1))" "$end" "$count"
+}
+
+_apps_keybar() {
+  echo ""
+  echo -e "  ${BCYAN}[d]${RESET}elete ${BCYAN}[m]${RESET}ove ${BCYAN}[r]${RESET}estore ${BCYAN}[x]${RESET}relink  ${DIM}·${RESET}  ${BCYAN}[f]${RESET}ilters ${BCYAN}[/]${RESET}name ${BCYAN}[c]${RESET}lear"
+  echo -ne "  ${DIM}←/→ page · [s]ort [t]scope [R]escan · [b]ack${RESET} ${BCYAN}›${RESET} "
 }
 
 # ── Post-action summary: counts, space reclaimed, new free space ──
@@ -1879,11 +2182,13 @@ _delete_apps_multi() {
   fi
 
   # Map on-screen row numbers (1..n across all pages) onto the cache.
-  local -a app_paths app_locked
+  local -a app_paths app_locked app_kbs app_run
   local pos gi idx=1
   for ((pos=0; pos<n; pos++)); do
     gi=${VIS[$pos]}
     app_paths[$idx]="${APP_PATH[$gi]}"
+    app_kbs[$idx]=${APP_KB[$gi]:-0}
+    app_run[$idx]=${APP_RUN[$gi]:-0}
     case "${APP_STATE[$gi]}" in
       lock) app_locked[$idx]=1 ;;
       ext)  app_locked[$idx]=2 ;;
@@ -1927,9 +2232,10 @@ _delete_apps_multi() {
   local total_kb=0
   for i in "${selectable[@]}"; do
     local p="${app_paths[$i]}"
-    local kb; kb=$(du -sk "$p" 2>/dev/null | cut -f1); kb=${kb:-0}
+    local kb=${app_kbs[$i]:-0}   # from the scan; re-measured right before removal
     total_kb=$((total_kb+kb))
     printf "  - %s %s\n" "$(_size_cell "$kb")" "$(basename "$p")"
+    [ "${app_run[$i]:-0}" -eq 1 ] && warning "  $(basename "$p" .app) is running — quit it first for a clean result"
   done
 
   echo ""
@@ -2090,11 +2396,13 @@ _move_app_to_usb() {
   fi
 
   # Map on-screen row numbers (1..n across all pages) onto the cache.
-  local -a app_paths app_locked
+  local -a app_paths app_locked app_kbs app_run
   local pos gi idx=1
   for ((pos=0; pos<n; pos++)); do
     gi=${VIS[$pos]}
     app_paths[$idx]="${APP_PATH[$gi]}"
+    app_kbs[$idx]=${APP_KB[$gi]:-0}
+    app_run[$idx]=${APP_RUN[$gi]:-0}
     case "${APP_STATE[$gi]}" in
       lock) app_locked[$idx]=1 ;;
       ext)  app_locked[$idx]=2 ;;
@@ -2164,9 +2472,10 @@ _move_app_to_usb() {
   local total_kb=0 i
   for i in "${selectable[@]}"; do
     local p="${app_paths[$i]}"
-    local kb; kb=$(du -sk "$p" 2>/dev/null | cut -f1); kb=${kb:-0}
+    local kb=${app_kbs[$i]:-0}   # from the scan; re-measured right before removal
     total_kb=$((total_kb+kb))
     printf "  - %s %s\n" "$(_size_cell "$kb")" "$(basename "$p")"
+    [ "${app_run[$i]:-0}" -eq 1 ] && warning "  $(basename "$p" .app) is running — quit it first for a clean result"
   done
 
   if [ "$total_kb" -gt "$avail_kb" ]; then
@@ -2576,7 +2885,7 @@ vscode_manager() {
 # ══════════════════════════════════════════════════════════════
 #   ENTRY
 # ══════════════════════════════════════════════════════════════
-VERSION="3.8"
+VERSION="3.9"
 
 _usage() {
   cat <<USAGE

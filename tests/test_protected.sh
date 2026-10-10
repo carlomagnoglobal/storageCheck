@@ -191,6 +191,85 @@ gone_bid=(""); gone_name=("NoBid"); mk "Library/Application Support/NoBid"
 echo a | _app_leftovers >/dev/null 2>&1
 [ -e "$HOME/Library/Application Support/NoBid" ] && ok "no bundle id → nothing matched" || bad "name-only match removed data"
 
+echo ""; echo "Applications Manager: parsing helpers"
+[ "$(_parse_size_kb 500M)" = 512000 ]   && ok "500M parsed"  || bad "500M → $(_parse_size_kb 500M)"
+[ "$(_parse_size_kb 1.5g)" = 1572864 ]  && ok "1.5g parsed"  || bad "1.5g → $(_parse_size_kb 1.5g)"
+[ "$(_parse_size_kb 200)" = 204800 ]    && ok "bare number is MB" || bad "200 → $(_parse_size_kb 200)"
+[ "$(_parse_size_kb 800KB)" = 800 ]     && ok "800KB parsed" || bad "800KB → $(_parse_size_kb 800KB)"
+_parse_size_kb "big" >/dev/null && bad "junk size accepted" || ok "junk size rejected"
+_parse_size_kb "5T" >/dev/null && bad "unknown unit accepted" || ok "unknown unit rejected"
+T=$(( $(date -j -u -f "%Y-%m-%d %H:%M:%S" "2026-10-10 00:00:00" +%s) / 86400 ))
+out=$(printf '%s\n' "2026-01-01 05:00:00 +0000" "(null)" "2024-02-29 23:59:59 +0000" "2026-10-10 12:00:00 +0000" | _days_since "$T" | tr '\n' ' ')
+[ "$out" = "282 -1 954 0 " ] && ok "_days_since: dates, leap day, (null)" || bad "_days_since → $out"
+KEY=x; printf '\033[C' | { _read_key; [ "$KEY" = right ]; } && ok "_read_key: → arrow" || bad "_read_key arrow"
+printf 'd'      | { _read_key; [ "$KEY" = d ]; }     && ok "_read_key: single key, no Enter" || bad "_read_key single key"
+printf '\n'     | { _read_key; [ -z "$KEY" ]; }      && ok "_read_key: Enter is empty"       || bad "_read_key Enter"
+
+echo ""; echo "Applications Manager: filters and sort (_apps_view)"
+APP_N=5
+APP_NAME=(x Alpha Beta Gamma Delta Echo); APP_LNAME=(x alpha beta gamma delta echo)
+APP_KB=(0 100 5000 300000 2000000 50); APP_LOC=(x /App /App "~/App" /App /App)
+APP_STATE=(x ok admin ext ext lock); APP_TARGET=(x "" "" "$HOME" "/nonexistent/Delta.app" "")
+APP_USED=(x 5 200 -1 400 -2); APP_RUN=(x 1 0 0 0 0); APPS_USED_OK=1
+APPS_SCOPE=all; APPS_SORT=size_desc; APPS_PAGE=1
+vis() { _apps_view; local v="" i; for i in "${VIS[@]}"; do v="$v${APP_NAME[$i]} "; done; echo "$v"; }
+_apps_clear_filters
+[ "$(vis)" = "Delta Gamma Beta Alpha Echo " ] && ok "no filter: all, biggest first" || bad "no filter → $(vis)"
+APPS_F_NAME="ALP";      [ "$(vis)" = "Alpha " ] && ok "name filter, case-insensitive" || bad "name → $(vis)"
+APPS_F_NAME="*";        [ "$(vis)" = "" ] && ok "name filter treats * literally" || bad "glob name → $(vis)"
+_apps_clear_filters; APPS_F_MINKB=$(_parse_size_kb 1M); [ "$(vis)" = "Delta Gamma Beta " ] && ok "min size filter" || bad "minsize → $(vis)"
+_apps_clear_filters; APPS_F_USED=180; [ "$(vis)" = "Delta Beta " ] && ok "unused 180d+: dated only" || bad "used180 → $(vis)"
+_apps_clear_filters; APPS_F_USED=-1;  [ "$(vis)" = "Gamma " ] && ok "no-usage-record filter" || bad "used-1 → $(vis)"
+APPS_USED_OK=0; [ "$(vis)" = "Delta Gamma Beta Alpha Echo " ] && ok "last-used filter off without Spotlight data" || bad "noSpotlight → $(vis)"; APPS_USED_OK=1
+_apps_clear_filters; APPS_F_STATE=ext;     [ "$(vis)" = "Gamma " ] && ok "state: external (drive connected)" || bad "ext → $(vis)"
+APPS_F_STATE=offline; [ "$(vis)" = "Delta " ] && ok "state: drive offline" || bad "offline → $(vis)"
+APPS_F_STATE=lock;    [ "$(vis)" = "Echo " ]  && ok "state: protected" || bad "lock → $(vis)"
+_apps_clear_filters; APPS_F_RUN=yes; [ "$(vis)" = "Alpha " ] && ok "running only" || bad "run yes → $(vis)"
+APPS_F_RUN=no; [ "$(vis)" = "Delta Gamma Beta Echo " ] && ok "not running" || bad "run no → $(vis)"
+_apps_clear_filters; APPS_F_MINKB=200; APPS_F_STATE=ok; APPS_F_RUN=no; [ "$(vis)" = "" ] && ok "filters combine (AND)" || bad "combo → $(vis)"
+_apps_clear_filters; APPS_SORT=size_asc; [ "$(vis)" = "Echo Alpha Beta Gamma Delta " ] && ok "sort: small first" || bad "size_asc → $(vis)"
+APPS_SORT=name; [ "$(vis)" = "Alpha Beta Delta Echo Gamma " ] && ok "sort: name" || bad "name sort → $(vis)"
+APPS_SORT=used; [ "$(vis)" = "Delta Beta Alpha Gamma Echo " ] && ok "sort: oldest use first, no record, unknown last" || bad "used sort → $(vis)"
+APPS_SCOPE=usr; APPS_SORT=size_desc; [ "$(vis)" = "Gamma " ] && ok "scope ~/Applications" || bad "scope → $(vis)"
+APPS_SCOPE=all
+
+echo ""; echo "Applications Manager: size cache"
+SYS=$(mktemp -d); trap 'rm -rf "$FIX" "$SYS"' EXIT
+APPS_SYS_DIR="$SYS"
+mkapp() { mkdir -p "$1/Contents"; echo '<plist/>' > "$1/Contents/Info.plist"; dd if=/dev/zero of="$1/Contents/blob" bs=1024 count="$2" 2>/dev/null; }
+rm -f "$HOME/Applications/MovedToUSB.app"   # earlier fixture; no Info.plist, so never cacheable
+mkapp "$SYS/One.app" 2048; mkapp "$HOME/Applications/Two.app" 1024
+eval "$(declare -f _du_batch | sed '1s/_du_batch/_du_batch_real/')"
+_du_batch() { DU_SIZED=$((DU_SIZED + ${#DU_PATHS[@]})); _du_batch_real "$@"; }
+kb_of() { local i; for ((i=1; i<=APP_N; i++)); do [ "${APP_NAME[$i]}" = "$1" ] && echo "${APP_KB[$i]}"; done; }
+[ -f "$APPS_CACHE" ] && rm -f "$APPS_CACHE"
+DU_SIZED=0; _apps_scan >/dev/null 2>&1
+[ "$APP_N" -eq 2 ] && [ "$DU_SIZED" -eq 2 ] && ok "first scan sizes every app" || bad "first scan: N=$APP_N sized=$DU_SIZED"
+[ "$(kb_of One)" -ge 2048 ] && [ "$(kb_of Two)" -ge 1024 ] && ok "sizes are right" || bad "sizes: One=$(kb_of One) Two=$(kb_of Two)"
+[ -f "$APPS_CACHE" ] && [ "$(wc -l < "$APPS_CACHE" | tr -d ' ')" = 2 ] && ok "cache written" || bad "cache missing"
+DU_SIZED=0; _apps_scan >/dev/null 2>&1
+[ "$DU_SIZED" -eq 0 ] && [ "$(kb_of One)" -ge 2048 ] && ok "second scan answered from cache" || bad "second scan sized $DU_SIZED, One=$(kb_of One)"
+touch -t 202001010000 "$SYS/One.app/Contents/Info.plist"
+DU_SIZED=0; _apps_scan >/dev/null 2>&1
+[ "$DU_SIZED" -eq 1 ] && ok "updated app (Info.plist changed) re-sized alone" || bad "after update sized $DU_SIZED"
+printf 'garbage\nmore\tgarbage\n\x01\n' > "$APPS_CACHE"
+DU_SIZED=0; _apps_scan >/dev/null 2>&1
+[ "$DU_SIZED" -eq 2 ] && [ "$(kb_of Two)" -ge 1024 ] && ok "corrupt cache → full re-size, correct sizes" || bad "corrupt cache: sized $DU_SIZED"
+rm -rf "$HOME/Applications/Two.app"
+DU_SIZED=0; _apps_scan >/dev/null 2>&1
+[ "$APP_N" -eq 1 ] && [ "$DU_SIZED" -eq 0 ] && ok "removed app drops out, nothing re-sized" || bad "after removal N=$APP_N sized=$DU_SIZED"
+
+echo ""; echo "Applications Manager: keys (headless)"
+clear() { :; }
+applications_manager < <(printf 'feo\nb') >/dev/null 2>&1
+[ "$APPS_F_STATE" = ok ] && [ "$APPS_F_RUN" = yes ] && ok "f panel: e/o cycle state and running" || bad "panel → state=$APPS_F_STATE run=$APPS_F_RUN"
+applications_manager < <(printf 'feo\ncb') >/dev/null 2>&1
+[ "$APPS_F_STATE" = any ] && [ "$APPS_F_RUN" = any ] && ok "c clears every filter" || bad "clear → state=$APPS_F_STATE run=$APPS_F_RUN"
+applications_manager < <(printf 'ss') >/dev/null 2>&1   # EOF must end the loop, not spin
+# (keys come in via < <(…), not a pipe: a pipe would run the screen in a subshell)
+[ "$APPS_SORT" = name ] && ok "s cycles sort; EOF leaves the screen" || bad "sort → $APPS_SORT"
+DRY_RUN=1; applications_manager < <(printf 'd\nb') >/dev/null 2>&1; DRY_RUN=0
+[ -d "$SYS/One.app" ] && ok "dry-run: [d]elete removes nothing" || bad "dry-run delete removed an app"
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
