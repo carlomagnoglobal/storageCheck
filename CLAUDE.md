@@ -54,11 +54,13 @@ Every candidate path is tagged with exactly one tier:
 - **🟡 REVIEW** — re-downloadable but not "free" to lose (AI models, IDE installs, extensions). Always itemized, never bulk-deleted.
 - **🔴 PROTECTED** — never shown, never offered, no matter what. Enforced by `_wiz_protected()`, a hard guard checked before any path is even added to the candidate list.
 
-**`_wiz_protected()` is the single safety-critical function in this codebase.** It currently blocks (case-insensitive substring match on the full path): OneDrive, Dropbox, Google Drive/CloudStorage, iCloud (`Mobile Documents`/`CloudDocs`), WhatsApp, Telegram, `~/Library/Mail`, Keychains, Photos library, Office/Outlook. Any change that touches the candidate-building logic in `safe_wizard` must keep every path through `_wiz_protected()` before it reaches `CANDIDATES`.
+**`_wiz_protected()` is the single safety-critical function in this codebase.** It currently blocks (case-insensitive substring match on the full path): anything under `/com.apple.*` or `/group.com.apple.*`; OneDrive, Dropbox, Google Drive (`DriveFS` included — its `content_cache` holds offline and not-yet-uploaded files), CloudStorage, iCloud (`Mobile Documents`/`CloudDocs`), CloudKit, Box, pCloud, Nextcloud, Synology, MEGA; WhatsApp, Telegram; `~/Library/Mail`, Keychains, Photos library, Office/Outlook. Any change that touches the candidate-building logic in `_wizard_collect` must keep every path through `_wiz_protected()` before it reaches `CANDIDATES`.
 
 SAFE candidates come from two sources, both pattern-based (not hardcoded per-app paths, so they generalize to any Mac):
-1. Whole-tree roots: `~/Library/Caches`, `~/Library/Logs`, `~/.Trash`, `~/.cache`, `Saved Application State`, Xcode `DerivedData`/CoreSimulator caches.
+1. Cache/log roots **child by child** (each child ≥1MB is its own candidate and goes through the guard): `~/Library/Caches/*`, `~/Library/Logs/*`, `~/Library/Saved Application State/*`. **Never add a root like `~/Library/Caches` as one candidate** — the guard would only see the root and sweep protected children (`com.apple.bird`, WhatsApp/OneDrive caches) along with it. Updater payloads (`*updater*`, `*.ShipIt`) are just relabelled children, so they are not counted twice. Whole-tree only where nothing protected can live inside: `~/.Trash`, Xcode `DerivedData`, CoreSimulator caches.
 2. A `find`-based scan under `~/Library/Application Support` and `~/Library/Containers` (maxdepth 5, `-prune`d at the match so it never recurses into a matched dir) for directory names matching `Cache`, `Caches`, `Code Cache`, `*Cache`, `CachedData`, `CachedExtensionVSIXs`, `logs`, `Crashpad`, `tmp` — each individually re-checked against `_wiz_protected()` before being added.
+
+The scan lives in `_wizard_collect`; `safe_wizard` runs it once and then loops its menu over the same `CANDIDATES` (listing doesn't rescan). REVIEW also holds `~/.cache` (can hold HuggingFace models) and dot-folder leftovers (`~/.cursor`, `~/.ollama`, …) that have neither a matching `.app` nor a CLI on `PATH` — never SAFE, since "no .app" is only a guess. `~/Applications/*.app` symlinks (external-drive launchers) are skipped.
 
 ### The Applications Manager screen (`applications_manager`)
 
@@ -80,10 +82,10 @@ Read-only. Writes a Markdown report containing: environment info, the script's *
 
 These hold today and any change must preserve them:
 
-1. **Nothing is deleted without going through `_wiz_protected()` first**, for every code path that adds to `CANDIDATES` in `safe_wizard`.
+1. **Nothing is deleted without going through `_wiz_protected()` first**, for every code path that adds to `CANDIDATES` in `_wizard_collect` (and every path `quick_clean` adds to its preview).
 2. **`com.apple.*` and `group.com.apple.*` are never offered for deletion.** (They were previously misclassified as `ORPHAN?` by an earlier, substring-based version of `_match_folder` — this was the bug that motivated the v3.2 rewrite. Do not reintroduce substring matching on short tokens; segment matching requires ≥4 chars.)
 3. **Sync/cloud and messaging stores are read-only everywhere**, including their own cache subfolders (`cloud_audit` reports sizes but never deletes; `_wiz_protected` blocks even `.../OneDrive.../Cache`).
-4. **`quick_clean` and `interactive_clean` only ever touch paths that exist** (`[ -e "$path" ]` before any `rm -rf`) and report the freed size before deleting.
+4. **`quick_clean` and `interactive_clean` only ever touch paths that exist** (`[ -e "$path" ]` before any `rm -rf`) and report the freed size before deleting. `quick_clean` also runs every path through `_wiz_protected()`, scanning the Caches/Logs roots child by child like the wizard.
 5. **No `rm -rf` on a variable that could be empty or unset.** Every deletion site is `path`-guarded; if you add a new one, guard it the same way (`[ -e "$path" ] && rm -rf "$path"`, never a bare `rm -rf "$var"`).
 6. **Every menu function returns to `main_menu`** — via `_back_to_menu`, or by calling `main_menu` directly at the end of its own key loop (as `safe_wizard` and `applications_manager` do). Don't leave a dead-end function that exits the script outside option `0`.
 7. **Apps that live on an external drive are never `rm`'d from the manager.** The entry in `/Applications` is only a launcher symlink; removing it would orphan the bundle on the drive. `_delete_apps_multi` refuses `APP_STATE=ext` and points at `[r]estore`.
@@ -92,6 +94,8 @@ These hold today and any change must preserve them:
 
 - snake_case function names; helpers used only inside one function are prefixed `_` (e.g. `_wiz_protected`, `_ai_tools_list`).
 - Color vars are pre-defined at the top (`RED`/`BRED`/`YELLOW`/`BYELLOW`/`GREEN`/`BGREEN`/`CYAN`/`BCYAN`/`BLUE`/`BBLUE`/`MAGENTA`/`BMAGENTA`/`BOLD`/`DIM`/`RESET`) — reuse these, don't invent new ANSI codes inline.
+- Deletion helper: `_rm_tracked <path> <kb_before>` does the `rm -rf`, echoes the KB actually reclaimed and returns 1 if anything survived (no Full Disk Access, file in use). Use it for new deletion sites so "Freed X" totals stay honest.
+- Disk numbers come from `$DATA_VOL` (`/System/Volumes/Data`, falling back to `/`). Don't use `df /` — since Catalina that is the small read-only system volume and under-reports usage (22% vs a real 77% on the dev Mac).
 - Output helpers: `section "title"`, `success "msg"`, `warning "msg"`, `danger "msg"`, `info "msg"`, `skipped "msg"`, `divider`. Use these instead of raw `echo -e` for anything user-facing.
 - Sizes are tracked in **KB internally** (`du -sk`) and converted for display only at the last moment via `human_kb()`. Don't parse `du -sh` output for arithmetic — it's not reliably parseable across locales/sizes.
 - `confirm "question"` returns shell true/false for `[[ "$answer" =~ ^[Yy]$ ]]`; use it for any new per-item prompt instead of rolling a new read/case block.
@@ -103,7 +107,7 @@ These hold today and any change must preserve them:
 - `_match_folder()`'s segment list is rebuilt by scanning `/Applications`, `~/Applications`, `/System/Applications`, `/Applications/Utilities` every run (`generate_feedback` only) — this is intentionally not cached; keep it that way since installed apps can change between runs.
 - The script assumes a single-user `$HOME` and does not support being run as root or against another user's home directory.
 - No automated tests exist; validate changes with `bash -n storage_check.sh` (syntax) and, for any change to `safe_wizard`/`_wiz_protected`, manually trace a few real paths through the guard before considering the change done. Interactive screens can be exercised headlessly by sourcing the script with its final `main_menu` line stripped (`sed '$ d'`), stubbing `main_menu`/`confirm`, and piping keystrokes in.
-- The version string appears in four places — the file header comment, the `main_menu` banner, the `safe_wizard` "pattern engine" label, and the `Generator:` line in `generate_feedback`. They are all **v3.5**; update all four together (`grep -n 'v3\.[0-9]'`). Note this is a display version only, distinct from the historical "v3.2 rewrite" referenced above.
+- The version string appears in four places — the file header comment, the `main_menu` banner, the `safe_wizard` "pattern engine" label, and the `Generator:` line in `generate_feedback`. They are all **v3.6**; update all four together (`grep -n 'v3\.[0-9]'`). Note this is a display version only, distinct from the historical "v3.2 rewrite" referenced above.
 
 ## When making changes
 

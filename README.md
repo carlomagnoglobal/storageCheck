@@ -8,29 +8,40 @@ An interactive terminal tool for auditing Mac disk usage with a **Safe Cleanup W
 
 ## Features
 
-### Core Functionality
+The menu is grouped into four sections. All ANALYZE screens are read-only.
 
-- **Full Audit** — Deep scan with comprehensive recommendations
-- **Quick Clean** — One-click deletion of well-known safe cache/log paths
-- **Interactive Clean** — Itemized deletion of IDE caches, LM Studio models, VSCode extensions
-- **Safe Cleanup Wizard** — Pattern-based 3-tier classifier that separates safe, review-needed, and protected files
-- **Large File Search** — Find files above a minimum size threshold
-- **Cloud & Sync Audit** — Read-only reporting of OneDrive, iCloud, Dropbox, WhatsApp, Telegram footprints
-- **LM Studio Manager** — Inventory and optional cleanup of LM Studio model downloads
-- **Ollama Manager** — Inventory and optional cleanup of Ollama model downloads
-- **App Support Deep Dive** — Drill down into `~/Library/Application Support` for cache discovery
-- **AI Tools Audit** — Detailed footprint of IDE and AI tool installations
-- **Storage Reports** — Export findings to a timestamped text file
+### 🔍 Analyze
+- **Full Audit**: deep scan of home, Library, AI tools, caches and snapshots, with recommendations
+- **Storage Visualizer**: bar or pie view of what is using your disk
+- **Find Large Files**: files above a size you choose (e.g. `500M`, `2G`), largest first
+- **Cloud & Sync Audit**: sizes of OneDrive, iCloud, Google Drive, Dropbox, WhatsApp, Telegram (never deletes)
+- **AI Tools Audit**: footprint of AI IDEs and tools (LM Studio, Cursor, Claude, Codex, …)
+- **App Support Deep Dive**: drill into `~/Library/Application Support`, Group Containers, JetBrains
 
-### The Safe Cleanup Wizard (Option 11)
+### 🧹 Clean
+- **🪄 Safe Cleanup Wizard**: the core feature, a pattern-based 3-tier classifier (see below)
+- **Quick Clean**: one confirmation for well-known caches and logs (same protection guard as the wizard)
+- **Interactive Clean**: asks item by item about IDEs, LM Studio models and VSCode extensions
+- **Time Machine & Backups**: local APFS snapshots and iPhone/iPad backups
 
-The core feature uses a **3-tier classification model**:
+### 📦 Manage
+- **Applications**: paged, sortable, filterable list of every app with sizes. Delete apps, **move them to a USB/external drive** (leaving a launcher link), restore them, or relink apps whose launcher is missing
+- **VSCode Extensions**: VS Code, Cursor, Windsurf, VSCodium and other forks: browse, delete, back up to Desktop
+- **LM Studio** / **Ollama**: model inventory with per-model deletion
 
-- **🟢 SAFE** — Caches, logs, temp files, updater payloads. Apps rebuild these automatically; zero data loss. Offered for bulk or itemized deletion.
-- **🟡 REVIEW** — Re-downloadable content (AI models, IDE installations, extensions). Always itemized, never bulk-deleted.
-- **🔴 PROTECTED** — Never shown or offered for deletion. Blocks: cloud stores (OneDrive, Dropbox, iCloud, Google Drive), messaging apps (WhatsApp, Telegram), system files, personal data, Keychains, Photos library.
+### 🧰 Tools
+- **Save Report to File**: plain-text snapshot at `~/storage_report_<timestamp>.txt`
+- **Generate Feedback File**: Markdown diagnostic dump to feed back into Claude Code to improve the rules
 
-All candidates pass through a hardened safety guard before being offered for deletion.
+### The Safe Cleanup Wizard
+
+Every candidate gets exactly one tier:
+
+- **🟢 SAFE**: caches, logs, temp files, updater payloads, Trash. Apps rebuild these. Offered for one-click bulk or item-by-item deletion.
+- **🟡 REVIEW**: re-downloadable but not free to lose (AI models, IDEs, extensions, `~/.cache`, leftover dot-folders whose app seems gone). Always item by item, never bulk.
+- **🔴 PROTECTED**: never shown, never offered. Blocks macOS data (`com.apple.*`), cloud sync (OneDrive, Dropbox, Google Drive/DriveFS, iCloud, CloudKit, Box, pCloud, Nextcloud, Synology, MEGA), messaging (WhatsApp, Telegram), Mail, Keychains, Photos and Office/Outlook, including their cache subfolders.
+
+Cache roots such as `~/Library/Caches` are scanned child by child, so a protected folder inside one is skipped rather than deleted along with it.
 
 ## Requirements
 
@@ -54,74 +65,40 @@ bash storage_check.sh
 
 ## Usage
 
-Simply run the script and select from the numbered menu:
-
 ```bash
 bash storage_check.sh
 ```
 
-You'll see an interactive menu with options 1–11 plus exit (0). Each option runs independently and returns to the menu when complete.
+Pick an option from the numbered menu. Each screen returns to the menu when done; `0` exits. Menu numbers can change between versions, so this README refers to features by name.
 
-### Menu Options
+- **Quick cleanup:** Safe Cleanup Wizard → `a` (auto-clean all 🟢 items), or Quick Clean.
+- **Find what is big:** Storage Visualizer, Full Audit, Find Large Files.
+- **Free space without uninstalling:** Applications → `m` to move an app to an external drive.
 
-| # | Option | Purpose |
-|---|---|---|
-| 1 | Full Audit | Read-only deep scan with recommendations summary |
-| 2 | Quick Clean | Automatic deletion of well-known safe paths (caches, logs, temp) |
-| 3 | Interactive Clean | Itemized selection for IDE caches, LM Studio models, extensions |
-| 4 | AI Tools Audit | List IDE/tool footprints (Cursor, Copilot, LM Studio, etc.) |
-| 5 | App Support Deep | Explore `~/Library/Application Support` for cache patterns |
-| 6 | LM Studio Manager | Inventory and optional deletion of LM Studio models |
-| 7 | Ollama Manager | Inventory and optional deletion of Ollama models |
-| 8 | Cloud Audit | Read-only report: OneDrive, iCloud, Dropbox, messaging app sizes |
-| 9 | Save Report | Export findings to timestamped plain-text file |
-| 10 | Large File Search | Find files above a user-specified size threshold |
-| 11 | Safe Wizard | **Core feature** — pattern-based 3-tier classifier with bulk/itemized options |
-| 12 | Generate Feedback | Create diagnostic Markdown report for debugging or Claude Code integration |
-| 13 | Time Machine & Backups | Delete local TM snapshots and iOS device backups |
-| 14 | Applications Manager | Browse /Applications and ~/Applications by size, uninstall apps |
-| 0 | Exit | — |
-
-### Common Workflows
-
-**Quick cleanup:**
-- Option 2 (Quick Clean) for automatic removal of well-known safe paths
-- Or Option 11 (Safe Wizard) for guided, pattern-based selection
-
-**Investigate disk usage:**
-- Option 1 (Full Audit) for a complete overview
-- Option 10 (Large File Search) to find specific size ranges
-- Option 8 (Cloud Audit) to see sync folder sizes without deletion
-
-**Deep maintenance:**
-- Option 5 (App Support Deep Dive) to explore `~/Library/Application Support`
-- Option 6 (LM Studio Manager) to review LM Studio model downloads
-- Option 7 (Ollama Manager) to review Ollama model downloads
-- Option 13 (Time Machine & Backups) to delete local snapshots and iOS device backups
-- Option 14 (Applications Manager) to browse and uninstall apps
-- Option 12 (Generate Feedback) to create a diagnostic report
+**Tip:** grant your terminal **Full Disk Access** (System Settings → Privacy & Security). Without it, macOS hides some folders, so sizes come out too low and folders like Trash can't be cleaned.
 
 ## Safety Design
 
-- **Nothing is deleted without explicit confirmation** or one-click bulk action (Quick Clean only)
+- **Nothing is deleted without explicit confirmation** (bulk actions show the total and ask once)
 - **Cloud and sync stores are read-only** — reported but never touched
 - **System and personal data are protected** — no macOS files, Keychains, Photos, Mail ever offered
-- **Every deletion is guarded** — existence checks before removal, no empty variable deletions
+- **Every deletion is guarded**: existence checks before removal, no empty-variable deletions, and freed space is only reported for what was actually removed
 - **Pattern-based, not hardcoded** — safe rules generalize across different Macs and app configurations
 
 ### The Safe Wizard's Protection Model
 
 The Safe Wizard's `_wiz_protected()` function is the safety-critical guard. It blocks any path containing (case-insensitive substring match):
 
-- Cloud/sync: OneDrive, Dropbox, Google Drive, CloudStorage, iCloud (Mobile Documents, CloudDocs)
+- macOS: `/com.apple.*`, `/group.com.apple.*`
+- Cloud/sync: OneDrive, Dropbox, Google Drive (incl. DriveFS), CloudStorage, iCloud (Mobile Documents, CloudDocs), CloudKit, Box, pCloud, Nextcloud, Synology, MEGA
 - Messaging: WhatsApp, Telegram
-- System: Keychains, Photos library, Mail, Office/Outlook data
+- Personal: Keychains, Photos library, Mail, Office/Outlook data
 
 This guard is applied **before any candidate is offered for deletion**, ensuring nothing outside SAFE/REVIEW/PROTECTED tiers ever reaches the user's prompt.
 
 ## Files
 
-- `storage_check.sh` — Single-file executable (~1500 lines). Organized as: color helpers → main menu → menu functions → shared helpers
+- `storage_check.sh` — Single-file executable (~2300 lines). Organized as: color helpers → main menu → menu functions → shared helpers
 - `CLAUDE.md` — Development notes, architecture overview, safety invariants, contribution guidelines
 - `README.md` — This file
 
@@ -148,10 +125,10 @@ See `CLAUDE.md` for detailed architecture and known limitations.
 
 For issues, suggestions, or diagnostic data:
 
-1. Run **Option 11 (Generate Feedback)** to create a detailed diagnostic report
+1. Run **Generate Feedback File** (TOOLS menu) to create a detailed diagnostic report
 2. Share the generated `~/claude_code_feedback_*.md` file with your report
 3. Include the option you were using when the issue occurred
 
 ## License
 
-See repository for license details.
+MIT. See [LICENSE](LICENSE).

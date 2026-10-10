@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║      MAC STORAGE MANAGER v3.5 — by Claude                    ║
+# ║      MAC STORAGE MANAGER v3.6 — by Claude                    ║
 # ║      Audit · Analyze · Clean · Report · Wizard · Feedback    ║
 # ╚══════════════════════════════════════════════════════════════╝
 
@@ -39,12 +39,17 @@ human_kb() {
   }'
 }
 
+# Volume that holds user data. Since Catalina, "/" is the small read-only
+# system volume, so `df /` under-reports usage (e.g. 22% vs a real 77%).
+# Free space is shared across the APFS container, but Used/% are not.
+DATA_VOL="/System/Volumes/Data"; [ -d "$DATA_VOL" ] || DATA_VOL="/"
+
 # Fills DISK_PCT / DISK_USED / DISK_FREE / DISK_TOTAL / DISK_COLOR from df.
 _disk_stats() {
-  DISK_PCT=$(df / | awk 'NR==2{gsub(/%/,"",$5); print $5}')
-  DISK_TOTAL=$(df -h / | awk 'NR==2{print $2}')
-  DISK_USED=$(df -h / | awk 'NR==2{print $3}')
-  DISK_FREE=$(df -h / | awk 'NR==2{print $4}')
+  DISK_PCT=$(df "$DATA_VOL" | awk 'NR==2{gsub(/%/,"",$5); print $5}')
+  DISK_TOTAL=$(df -h "$DATA_VOL" | awk 'NR==2{print $2}')
+  DISK_USED=$(df -h "$DATA_VOL" | awk 'NR==2{print $3}')
+  DISK_FREE=$(df -h "$DATA_VOL" | awk 'NR==2{print $4}')
   if   [ "$DISK_PCT" -ge 80 ]; then DISK_COLOR="${BRED}"
   elif [ "$DISK_PCT" -ge 60 ]; then DISK_COLOR="${BYELLOW}"
   else DISK_COLOR="${BGREEN}"; fi
@@ -92,12 +97,26 @@ confirm() {
   [[ "$answer" =~ ^[Yy]$ ]]
 }
 
+# rm -rf an existing path and echo the KB actually reclaimed ($2 = size
+# before, minus whatever is left behind). Returns 1 if anything survived
+# (e.g. no Full Disk Access, file in use), so callers report it honestly.
+_rm_tracked() {
+  local path="$1" before="${2:-0}" left
+  if [ -z "$path" ] || [ ! -e "$path" ]; then echo 0; return 1; fi
+  rm -rf "$path" 2>/dev/null
+  if [ -e "$path" ]; then
+    left=$(du -sk "$path" 2>/dev/null | cut -f1); left=${left:-0}
+    [ "$left" -gt "$before" ] && left=$before
+    echo $((before-left)); return 1
+  fi
+  echo "$before"
+}
+
 # Standard prompt for submenu action keys, e.g. ask_choice "d=delete  m=move  b=back"
 menu_group() { echo -e "\n  ${DIM}─── $1 ───${RESET}"; }
 ask_choice() { echo -ne "\n  ${BCYAN}$1 › ${RESET}"; }
 press_any_key() { echo ""; echo -ne "  ${DIM}Press any key to continue...${RESET}"; read -rn1; }
 
-REPORT_FILE="$HOME/storage_report_$(date '+%Y%m%d_%H%M%S').txt"
 
 # ══════════════════════════════════════════════════════════════
 #   MAIN MENU
@@ -106,7 +125,7 @@ main_menu() {
   clear
   echo ""
   echo -e "${BMAGENTA}╔══════════════════════════════════════════════════════════╗${RESET}"
-  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.5                         ║${RESET}"
+  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.6                         ║${RESET}"
   echo -e "${BMAGENTA}║     $(date '+%a %d %b %Y — %H:%M')                              ║${RESET}"
   echo -e "${BMAGENTA}╚══════════════════════════════════════════════════════════╝${RESET}"
   echo ""
@@ -156,7 +175,7 @@ main_menu() {
     13) lmstudio_manager ;; 14) ollama_manager ;;
     15) save_report ;;     16) generate_feedback ;;
     0)
-      local free_now=$(df -h / | awk 'NR==2{print $4}')
+      local free_now=$(df -h "$DATA_VOL" | awk 'NR==2{print $4}')
       echo -e "\n  ${BGREEN}Goodbye! 👋 Free space now: ${BYELLOW}${free_now}${RESET}\n"
       exit 0
       ;;
@@ -183,8 +202,13 @@ main_menu() {
 _wiz_protected() {
   local low=$(echo "$1" | tr '[:upper:]' '[:lower:]')
   case "$low" in
-    # Cloud/sync platforms: library & container paths
-    *onedrive*|*dropbox*|*"google drive"*|*googledrive*|*cloudstorage*|*"mobile documents"*|*clouddocs*) return 0 ;;
+    # macOS-owned data: anything under a com.apple.* / group.com.apple.* folder
+    # (Containers, Caches, Saved Application State, ...). Never offered.
+    */com.apple.*|*/group.com.apple.*)                                                    return 0 ;;
+    # Cloud/sync platforms: library & container paths. DriveFS is Google
+    # Drive's engine — its content_cache holds offline + not-yet-uploaded files.
+    *onedrive*|*dropbox*|*"google drive"*|*googledrive*|*drivefs*|*cloudstorage*|*"mobile documents"*|*clouddocs*|*/cloudkit*) return 0 ;;
+    *"/application support/box/"*|*com.box.desktop*|*pcloud*|*nextcloud*|*synology*|*megasync*|*"mega limited"*) return 0 ;;
     # Messaging apps
     *whatsapp*|*telegram*|*"group.net.whatsapp"*)                                        return 0 ;;
     # Apple system apps & services
@@ -195,25 +219,70 @@ _wiz_protected() {
   return 1
 }
 
-safe_wizard() {
+_wizard_header() {
   clear
-  echo -e "${BGREEN}${BOLD}🪄  SAFE CLEANUP WIZARD${RESET}  ${DIM}(v3.5 pattern engine)${RESET}"
+  echo -e "${BGREEN}${BOLD}🪄  SAFE CLEANUP WIZARD${RESET}  ${DIM}(v3.6 pattern engine)${RESET}"
   divider
   echo -e "  Offers only items that are ${BGREEN}safe by design${RESET}: caches, logs, temp & re-downloadables."
   echo -e "  It ${BRED}never${RESET} touches macOS system data, cloud sync, chats, mail, or your files."
   echo -e "  ${DIM}🟢 safe (auto-rebuilds) · 🟡 re-downloadable (you decide) · 🔴 protected (hidden)${RESET}"
   echo ""
+}
 
-  CANDIDATES=()   # entries: "TIER|kb|path|label|note"
+safe_wizard() {
+  _wizard_header
+  info "Scanning by universal cache/log patterns (works on any Mac)..."
+  _wizard_collect
+
+  # The scan is slow, so the menu loops over the same CANDIDATES
+  # (listing and invalid keys no longer trigger a rescan).
+  local wchoice c tier kb path label note safe_total review_total
+  while true; do
+    safe_total=0; review_total=0
+    for c in "${CANDIDATES[@]}"; do
+      IFS='|' read -r tier kb path label note <<< "$c"
+      [ "$tier" = "SAFE" ]   && safe_total=$((safe_total+kb))
+      [ "$tier" = "REVIEW" ] && review_total=$((review_total+kb))
+    done
+
+    echo ""
+    divider
+    echo -e "  ${BGREEN}🟢 Safe to delete now:${RESET}        ${BOLD}$(human_kb $safe_total)${RESET}"
+    echo -e "  ${BYELLOW}🟡 Re-downloadable (review):${RESET}  ${BOLD}$(human_kb $review_total)${RESET}"
+    echo -e "  ${BRED}🔴 Protected (never touched):${RESET} ${DIM}macOS data, cloud sync, chats, mail, your files${RESET}"
+    divider
+
+    echo ""
+    echo -e "  ${BOLD}How would you like to proceed?${RESET}"
+    echo -e "  ${BOLD}a)${RESET} ${BGREEN}Auto-clean ALL 🟢 safe items${RESET} ${DIM}(recommended, instant)${RESET}"
+    echo -e "  ${BOLD}p)${RESET} Pick items one-by-one ${DIM}(includes 🟡 review items)${RESET}"
+    echo -e "  ${BOLD}l)${RESET} List everything first ${DIM}(no deletion)${RESET}"
+    echo -e "  ${BOLD}b)${RESET} Back to menu"
+    ask_choice "[a]uto  [p]ick  [l]ist  [b]ack"
+    read -r wchoice
+
+    case "$wchoice" in
+      a|A) _wizard_auto_safe; return ;;
+      p|P) _wizard_pick; return ;;
+      l|L) _wizard_list; _wizard_header ;;
+      b|B|q|Q) main_menu; return ;;
+      *) warning "Invalid option — try one of the keys shown"; sleep 1; _wizard_header ;;
+    esac
+  done
+}
+
+# Fills CANDIDATES ("TIER|kb|path|label|note"). Every path goes through
+# _wiz_protected() before it is added — keep it that way.
+_wizard_collect() {
+  CANDIDATES=()
+  # add_candidate TIER path label note [min_kb]
   add_candidate() {
-    local tier="$1" path="$2" label="$3" note="$4"
+    local tier="$1" path="$2" label="$3" note="$4" min="${5:-1}"
     [ -e "$path" ] || return
     _wiz_protected "$path" && return
-    local kb=$(du -sk "$path" 2>/dev/null | cut -f1); [ -z "$kb" ] && kb=0
-    [ "$kb" -gt 0 ] && CANDIDATES+=("$tier|$kb|$path|$label|$note")
+    local kb; kb=$(du -sk "$path" 2>/dev/null | cut -f1); [ -z "$kb" ] && kb=0
+    [ "$kb" -ge "$min" ] && CANDIDATES+=("$tier|$kb|$path|$label|$note")
   }
-
-  info "Scanning by universal cache/log patterns (works on any Mac)..."
 
   # Build a set of installed app identifiers for accurate leftover detection
   local INSTALLED=" "
@@ -227,12 +296,27 @@ safe_wizard() {
     done
   done
 
-  # ───── 🟢 SAFE: whole-tree cache/log roots (their entire purpose) ─────
-  add_candidate SAFE "$HOME/Library/Caches"                       "All app caches (~/Library/Caches)" "Every app rebuilds these"
-  add_candidate SAFE "$HOME/Library/Logs"                         "Application logs"                  "Diagnostic text only"
+  # ───── 🟢 SAFE: cache/log roots, one candidate per child ─────
+  # Never the root as a whole: the guard has to see each child, otherwise
+  # e.g. ~/Library/Caches/com.apple.bird or a WhatsApp/OneDrive cache inside
+  # would be swept along. Children < 1MB are skipped as noise. Updater
+  # downloads (*updater*, *.ShipIt) live here too and get a clearer label.
+  local d dn
+  for d in "$HOME/Library/Caches"/*; do
+    dn=$(basename "$d")
+    case "$dn" in
+      *.ShipIt)              add_candidate SAFE "$d" "Squirrel updater · $dn" "Old auto-update payload" 1024 ;;
+      *[Uu]pdater*)          add_candidate SAFE "$d" "Updater cache · $dn"    "Old downloaded installers" 1024 ;;
+      *)                     add_candidate SAFE "$d" "Cache · $dn"            "App rebuilds it" 1024 ;;
+    esac
+  done
+  for d in "$HOME/Library/Logs"/*; do
+    add_candidate SAFE "$d" "Logs · $(basename "$d")" "Diagnostic text only" 1024
+  done
+  for d in "$HOME/Library/Saved Application State"/*; do
+    add_candidate SAFE "$d" "Window state · $(basename "$d" .savedState)" "Just window positions" 1024
+  done
   add_candidate SAFE "$HOME/.Trash"                               "Trash bin"                         "Already-deleted files"
-  add_candidate SAFE "$HOME/.cache"                               "Generic ~/.cache"                  "Dev tool scratch cache"
-  add_candidate SAFE "$HOME/Library/Saved Application State"      "Saved window state"                "Just window positions"
 
   # ───── 🟢 SAFE: Xcode dev caches (you have Xcode installed) ─────
   add_candidate SAFE "$HOME/Library/Developer/Xcode/DerivedData"  "Xcode · DerivedData"               "Rebuilds on next build"
@@ -256,21 +340,17 @@ safe_wizard() {
                  -o -iname "logs" -o -iname "Crashpad" -o -iname "tmp" \
               \) -prune -print 2>/dev/null)
 
-  # ───── 🟢 SAFE: updater caches (downloaded installers, pattern) ─────
-  for up in "$HOME/Library/Caches"/*[Uu]pdater* "$HOME/Library/Caches"/*-updater; do
-    [ -d "$up" ] && add_candidate SAFE "$up" "Updater cache · $(basename "$up")" "Old downloaded installers"
-  done
-  for shipit in "$HOME/Library/Caches"/*.ShipIt; do
-    [ -d "$shipit" ] && add_candidate SAFE "$shipit" "Squirrel updater · $(basename "$shipit")" "Old auto-update payload"
-  done
-
-  # ───── 🟢 SAFE: confirmed leftovers (owning app NOT installed) ─────
+  # ───── 🟡 REVIEW: likely leftovers (no .app AND no CLI of that name) ─────
+  # REVIEW, never SAFE: a dot-folder can hold models, settings or logins, and
+  # "no .app found" is a guess (e.g. Homebrew's ollama CLI has no bundle).
   for tool in cursor windsurf trae codeium antigravity comet manus qwen wispr ollama; do
     case "$INSTALLED" in *" $tool "*|*"$tool"*) continue ;; esac   # app present → skip
-    add_candidate SAFE "$HOME/.$tool"                            "Leftover · .$tool"        "Owning app not installed"
+    command -v "$tool" >/dev/null 2>&1 && continue                  # CLI present → skip
+    add_candidate REVIEW "$HOME/.$tool"                          "Leftover? · .$tool"       "No app or CLI found — check before deleting"
   done
 
   # ───── 🟡 REVIEW: large but re-downloadable / re-installable ─────
+  add_candidate REVIEW "$HOME/.cache"                            "Generic ~/.cache"         "Dev tool caches — may hold big re-downloads (e.g. HuggingFace models)"
   add_candidate REVIEW "$HOME/.vscode/extensions"                "VSCode extensions (~/.vscode)" "Re-installable from Marketplace"
   add_candidate REVIEW "$HOME/.lmstudio/extensions"              "LM Studio · runtimes/extensions" "Re-downloadable"
   for m in "$HOME/.lmstudio/models"/*/; do
@@ -278,41 +358,10 @@ safe_wizard() {
   done
   # IDEs in ~/Applications — the single biggest opportunity on this Mac
   for a in "$HOME/Applications"/*.app; do
+    # A symlink is a launcher for an app moved to an external drive — never rm it here.
+    [ -L "$a" ] && continue
     [ -d "$a" ] && add_candidate REVIEW "$a" "IDE · $(basename "$a")" "Re-installable (JetBrains Toolbox etc.)"
   done
-
-  # ── Tally ─────────────────────────────────────────────────
-  local safe_total=0 review_total=0
-  for c in "${CANDIDATES[@]}"; do
-    IFS='|' read -r tier kb path label note <<< "$c"
-    [ "$tier" = "SAFE" ]   && safe_total=$((safe_total+kb))
-    [ "$tier" = "REVIEW" ] && review_total=$((review_total+kb))
-  done
-
-  echo ""
-  divider
-  echo -e "  ${BGREEN}🟢 Safe to delete now:${RESET}        ${BOLD}$(human_kb $safe_total)${RESET}"
-  echo -e "  ${BYELLOW}🟡 Re-downloadable (review):${RESET}  ${BOLD}$(human_kb $review_total)${RESET}"
-  echo -e "  ${BRED}🔴 Protected (never touched):${RESET} ${DIM}OneDrive, WhatsApp, iCloud, your files${RESET}"
-  divider
-
-  # ── Action menu ───────────────────────────────────────────
-  echo ""
-  echo -e "  ${BOLD}How would you like to proceed?${RESET}"
-  echo -e "  ${BOLD}a)${RESET} ${BGREEN}Auto-clean ALL 🟢 safe items${RESET} ${DIM}(recommended, instant)${RESET}"
-  echo -e "  ${BOLD}p)${RESET} Pick items one-by-one ${DIM}(includes 🟡 review items)${RESET}"
-  echo -e "  ${BOLD}l)${RESET} List everything first ${DIM}(no deletion)${RESET}"
-  echo -e "  ${BOLD}b)${RESET} Back to menu"
-  ask_choice "[a]uto  [p]ick  [l]ist  [b]ack"
-  read -r wchoice
-
-  case "$wchoice" in
-    a|A) _wizard_auto_safe ;;
-    p|P) _wizard_pick ;;
-    l|L) _wizard_list; safe_wizard ;;
-    b|B|q|Q) main_menu ;;
-    *) warning "Invalid option — try one of the keys shown"; sleep 1; safe_wizard ;;
-  esac
 }
 
 _wizard_list() {
@@ -342,18 +391,23 @@ _wizard_auto_safe() {
   fi
 
   echo ""
-  local freed=0
+  local freed=0 got fails=0
   for c in "${CANDIDATES[@]}"; do
     IFS='|' read -r tier kb path label note <<< "$c"
     if [ "$tier" = "SAFE" ] && [ -e "$path" ]; then
-      rm -rf "$path"
-      freed=$((freed+kb))
-      success "$label ${DIM}($(human_kb $kb))${RESET}"
+      if got=$(_rm_tracked "$path" "$kb"); then
+        success "$label ${DIM}($(human_kb $kb))${RESET}"
+      else
+        warning "$label — only partly removed ${DIM}(in use, or needs Full Disk Access)${RESET}"
+        fails=$((fails+1))
+      fi
+      freed=$((freed+got))
     fi
   done
   echo ""
   divider
   echo -e "  ${BGREEN}✨ Done! Freed ${BYELLOW}${BOLD}$(human_kb $freed)${RESET}"
+  [ "$fails" -gt 0 ] && warning "$fails item(s) could not be fully removed"
   divider
   _back_to_menu
 }
@@ -381,9 +435,13 @@ _wizard_pick() {
     echo -ne "     ${BYELLOW}Delete? [y/N]: ${RESET}"
     read -r ans
     if [[ "$ans" =~ ^[Yy]$ ]]; then
-      rm -rf "$path"
-      freed=$((freed+kb))
-      success "Deleted ${DIM}($(human_kb $kb))${RESET}"
+      local got
+      if got=$(_rm_tracked "$path" "$kb"); then
+        success "Deleted ${DIM}($(human_kb $kb))${RESET}"
+      else
+        warning "Only partly removed ${DIM}($(human_kb $got) freed — in use, or needs Full Disk Access)${RESET}"
+      fi
+      freed=$((freed+got))
     else
       skipped "Kept"
     fi
@@ -406,8 +464,7 @@ full_audit() {
   divider
 
   section "💾 DISK OVERVIEW"
-  df -h / | awk 'NR==2 {printf "  Total:     %s\n  Used:      %s (%s)\n  Available: %s\n",$2,$3,$5,$4}'
-  local purge=$(df / | awk 'NR==2{print $4}')
+  df -h "$DATA_VOL" | awk 'NR==2 {printf "  Total:     %s\n  Used:      %s (%s)\n  Available: %s\n",$2,$3,$5,$4}'
   info "Tip: macOS may show extra 'purgeable' space not freed until needed"
 
   section "📁 HOME DIRECTORY — Top 25"
@@ -445,7 +502,7 @@ full_audit() {
   section "💡 RECOMMENDATIONS"; _print_recommendations
 
   echo ""
-  echo -e "  ${BGREEN}${BOLD}👉 Tip: use option 10 (Safe Cleanup Wizard) to free space safely.${RESET}"
+  echo -e "  ${BGREEN}${BOLD}👉 Tip: use the Safe Cleanup Wizard (CLEAN menu) to free space safely.${RESET}"
   _back_to_menu
 }
 
@@ -460,17 +517,23 @@ quick_clean() {
   info "Scanning caches, logs, updater downloads, and leftovers..."
   echo ""
 
-  # Pass 1: scan and build "kb|path|label" preview lines (same paths as before)
+  # Pass 1: scan and build "kb|path|label" preview lines. Every path goes
+  # through _wiz_protected(), same as the wizard.
   PREVIEW="" ; total_kb=0
   _qc_scan() {
     local p="$1" l="$2"
     [ -e "$p" ] || return
+    _wiz_protected "$p" && return
     local kb=$(du -sk "$p" 2>/dev/null|cut -f1); kb=${kb:-0}
+    [ "$kb" -gt 0 ] || return
     PREVIEW="${PREVIEW}${kb}|${p}|${l}"$'\n'
     total_kb=$((total_kb+kb))
   }
-  _qc_scan ~/Library/Caches                                          "System Caches"
-  _qc_scan ~/Library/Logs                                            "Log Files"
+  # Cache/log roots child by child, so protected children (com.apple.*,
+  # sync and messaging caches) are skipped instead of swept along.
+  local d
+  for d in ~/Library/Caches/*; do _qc_scan "$d" "App caches (~/Library/Caches)"; done
+  for d in ~/Library/Logs/*;   do _qc_scan "$d" "Log files (~/Library/Logs)"; done
   _qc_scan ~/Library/Application\ Support/Claude/Cache               "Claude Cache"
   _qc_scan ~/Library/Application\ Support/Claude/Code\ Cache         "Claude Code Cache"
   _qc_scan ~/Library/Application\ Support/Claude/GPUCache            "Claude GPU Cache"
@@ -482,11 +545,7 @@ quick_clean() {
     [ -d "${d}caches" ] && _qc_scan "${d}caches" "JetBrains $(basename "$d") caches"
     [ -d "${d}log" ]    && _qc_scan "${d}log"    "JetBrains $(basename "$d") logs"
   done
-  _qc_scan ~/Library/Caches/JetBrains                                "JetBrains System Cache"
   _qc_scan ~/Library/Application\ Support/Spotify/PersistentCache    "Spotify Cache"
-  for tool in cursor windsurf trae codeium; do
-    _qc_scan ~/."$tool" "${tool} dot-folder"
-  done
   _qc_scan ~/.Trash                                                  "Trash"
 
   # Check if anything was found
@@ -497,11 +556,15 @@ quick_clean() {
   fi
 
   # Show preview
+  # Preview is grouped by label (the Caches/Logs roots expand to many paths).
   section "Items to be deleted"
-  while IFS='|' read -r kb path label; do
-    [ -z "$kb" ] && continue
-    printf "  %-9s %s\n" "$(color_size $(human_kb "$kb"))" "$label"
-  done <<< "$PREVIEW"
+  printf '%s' "$PREVIEW" | awk -F'|' '
+    NF>=3 { if (!($3 in s)) order[++n]=$3; s[$3]+=$1; c[$3]++ }
+    END   { for (i=1;i<=n;i++) print s[order[i]] "|" order[i] "|" c[order[i]] }
+  ' | while IFS='|' read -r kb label cnt; do
+    local extra=""; [ "$cnt" -gt 1 ] && extra=" ${DIM}($cnt folders)${RESET}"
+    printf "  %s %b\n" "$(_size_cell "$kb")" "$label$extra"
+  done
 
   # Single confirmation
   echo ""; divider
@@ -513,18 +576,18 @@ quick_clean() {
 
   # Pass 2: Delete and report
   echo ""
-  local freed_kb=0
+  local freed_kb=0 got fails=0
   while IFS='|' read -r kb path label; do
     [ -z "$kb" ] && continue
     if [ -e "$path" ]; then
-      rm -rf "$path"
-      success "$label ${DIM}($(human_kb $kb))${RESET}"
-      freed_kb=$((freed_kb+kb))
+      got=$(_rm_tracked "$path" "$kb") || fails=$((fails+1))
+      freed_kb=$((freed_kb+got))
     fi
   done <<< "$PREVIEW"
 
   echo ""; divider
   echo -e "  ${BGREEN}✨ Freed approximately ${BYELLOW}${BOLD}$(human_kb $freed_kb)${RESET}"
+  [ "$fails" -gt 0 ] && warning "$fails folder(s) could not be fully removed (in use, or needs Full Disk Access)"
   divider
   _back_to_menu
 }
@@ -540,12 +603,17 @@ safe_delete() {
   if [ -e "$path" ]; then
     local size=$(du -sh "$path" 2>/dev/null|cut -f1)
     if confirm "Delete ${label} (${size})?"; then
-      rm -rf "$path"; success "Deleted ${label} — ${BYELLOW}${size}${RESET}"
-      TOTAL_FREED="${TOTAL_FREED}${size} ← ${label}\n"
+      if _rm_tracked "$path" 0 >/dev/null; then
+        success "Deleted ${label} — ${BYELLOW}${size}${RESET}"
+        TOTAL_FREED="${TOTAL_FREED}${size} ← ${label}\n"
+      else
+        danger "Could not fully delete ${label} (in use, or needs Full Disk Access)"
+      fi
     else skipped "Skipped ${label}"; fi
   fi
 }
 interactive_clean() {
+  TOTAL_FREED=""   # summary below is for this run only
   clear
   section "🎯 INTERACTIVE CLEAN"
   info "Asks before each deletion. Includes apps & models (more aggressive than the wizard)."
@@ -697,19 +765,32 @@ ollama_manager() {
     if [ -z "$models" ]; then
       info "No models installed"
     else
-      echo "$models" | while read name id size modified; do
-        printf "  %-30s %-10s %s\n" "$name" "$size" "$modified"
+      echo "$models" | while read -r name id size unit modified; do
+        printf "  %-30s %-10s %s\n" "$name" "$size $unit" "$modified"
       done
     fi
   fi
   echo ""; info "Models re-download anytime via: ollama pull <model>"
-  if confirm "Start interactive model deletion?"; then
-    if command -v ollama >/dev/null 2>&1; then
-      ollama list 2>/dev/null | tail -n +2 | while read name id size modified; do
-        echo "  Removing: $name"
-        ollama rm "$name" 2>/dev/null
-      done
-    fi
+  if command -v ollama >/dev/null 2>&1 && confirm "Start interactive model deletion (asks per model)?"; then
+    # Read the list first: confirm() reads stdin, so it can't sit inside a
+    # `ollama list | while read` pipe (it would eat the model list).
+    local -a o_names o_sizes
+    local name id size unit rest k=0
+    while read -r name id size unit rest; do
+      [ -z "$name" ] && continue
+      o_names[$k]="$name"; o_sizes[$k]="$size $unit"; k=$((k+1))
+    done < <(ollama list 2>/dev/null | tail -n +2)
+    for ((k=0; k<${#o_names[@]}; k++)); do
+      if confirm "Remove model ${o_names[$k]} (${o_sizes[$k]})?"; then
+        if ollama rm "${o_names[$k]}" >/dev/null 2>&1; then
+          success "Removed ${o_names[$k]}"
+        else
+          danger "Could not remove ${o_names[$k]} (is the Ollama server running?)"
+        fi
+      else
+        skipped "Kept ${o_names[$k]}"
+      fi
+    done
   fi
   _back_to_menu
 }
@@ -760,12 +841,13 @@ cloud_audit() {
 #   Dumps a plain-text snapshot to ~/storage_report_<timestamp>.txt
 # ══════════════════════════════════════════════════════════════
 save_report() {
+  local REPORT_FILE="$HOME/storage_report_$(date '+%Y%m%d_%H%M%S').txt"
   clear; section "📝 SAVING FULL REPORT"; info "→ $REPORT_FILE"; echo ""
   {
     echo "MAC STORAGE REPORT — $(date '+%Y-%m-%d %H:%M:%S')"
     echo "Host: $(hostname) | macOS: $(sw_vers -productVersion)"
     echo "================================================"
-    echo ""; echo "DISK"; df -h /
+    echo ""; echo "DISK"; df -h "$DATA_VOL"
     echo ""; echo "HOME — Top 30"; du -sh ~/* ~/.[^.]* 2>/dev/null | sort -rh | head -30
     echo ""; echo "LIBRARY"
     for f in "Application Support" Caches Containers "Group Containers" Developer Logs; do
@@ -790,14 +872,23 @@ save_report() {
 find_large_files() {
   clear; section "🔍 FIND LARGE FILES"
   echo -ne "  ${BCYAN}Minimum size? ${RESET}${DIM}(e.g. 200M, 500M, 1G) [500M]: ${RESET}"; read -r ms; ms=${ms:-500M}
-  local fs num
-  if echo "$ms" | grep -qiE '^[0-9]+G$'; then num=$(echo "$ms"|grep -oE '[0-9]+'); fs="+$((num*1024))M"
-  else num=$(echo "$ms"|grep -oE '[0-9]+'); fs="+${num}M"; fi
+  local mb
+  ms=$(echo "$ms" | tr -d ' ' | tr '[:lower:]' '[:upper:]')
+  if   [[ "$ms" =~ ^([0-9]+)G$ ]];     then mb=$(( BASH_REMATCH[1] * 1024 ))
+  elif [[ "$ms" =~ ^([0-9]+)M?$ ]];    then mb=${BASH_REMATCH[1]}
+  else warning "Not a size: '$ms' — use a number with M or G, e.g. 500M"; _back_to_menu; return; fi
+  [ "$mb" -lt 1 ] && mb=1
   echo ""; info "Scanning for files > ${BYELLOW}${ms}${RESET}... (a moment)"; echo ""
-  find ~ -type f -size $fs 2>/dev/null | while read f; do
-    printf "  %-10s %s\n" "$(color_size $(du -sh "$f" 2>/dev/null|cut -f1))" "$f"
-  done | sort -rh | head -30
-  echo ""; info "Top 30 shown."
+  # Sort on raw size first, color last (sorting colored text scrambles the
+  # order). stat's apparent size matches what `find -size` filtered on; du
+  # would show the allocated size, which is tiny for sparse files.
+  local found=0 b f
+  while IFS=$'\t' read -r b f; do
+    [ -z "$b" ] && continue
+    printf "  %s %s\n" "$(_size_cell $(( b / 1024 )))" "$f"; found=$((found+1))
+  done < <(find ~ -type f -size +"${mb}"M -exec stat -f '%z%t%N' {} + 2>/dev/null | sort -rn | head -30)
+  echo ""
+  if [ "$found" -eq 0 ]; then info "No files larger than ${ms} found."; else info "Top $found shown, largest first."; fi
   _back_to_menu
 }
 
@@ -940,8 +1031,8 @@ _print_recommendations() {
   local ide=0; [ -d ~/Applications ] && ide=$(ls -d ~/Applications/*.app 2>/dev/null|wc -l|tr -d ' ')
   [ "$ide" -gt 3 ] && { warning "${ide} IDEs in ~/Applications ($(du -sh ~/Applications 2>/dev/null|cut -f1)) — uninstall unused"; found=1; }
   [ -d "$HOME/Library/Group Containers/UBF8T346G9.OneDriveSyncClientSuite" ] && { warning "OneDrive local data — use Files On-Demand"; found=1; }
-  [ -d ~/.lmstudio/models ] && { info "LM Studio models: $(du -sh ~/.lmstudio/models 2>/dev/null|cut -f1) — option 6 to manage"; found=1; }
-  [ -d ~/.ollama/models ] && { info "Ollama models: $(du -sh ~/.ollama/models 2>/dev/null|cut -f1) — option 7 to manage"; found=1; }
+  [ -d ~/.lmstudio/models ] && { info "LM Studio models: $(du -sh ~/.lmstudio/models 2>/dev/null|cut -f1) — use the LM Studio manager"; found=1; }
+  [ -d ~/.ollama/models ] && { info "Ollama models: $(du -sh ~/.ollama/models 2>/dev/null|cut -f1) — use the Ollama manager"; found=1; }
   [ "$found" -eq 0 ] && success "Looks clean! 🎉"
 }
 
@@ -1017,7 +1108,7 @@ generate_feedback() {
     echo ""
     echo "- Generated: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "- Host: $(hostname)"
-    echo "- Generator: storage_check.sh v3.5"
+    echo "- Generator: storage_check.sh v3.6"
     echo ""
     echo "---"
     echo ""
@@ -1025,8 +1116,8 @@ generate_feedback() {
     echo ""
     echo "You are improving the bash tool \`storage_check.sh\`. Use the data below to make it better at TWO things:"
     echo ""
-    echo "1. **Detect deletable files dynamically.** Today the Safe Cleanup Wizard (option 10) uses a hardcoded"
-    echo "   list of paths. Replace/augment it with rules that work on ANY Mac by reasoning from sections 4-6:"
+    echo "1. **Detect deletable files dynamically.** The Safe Cleanup Wizard (\`safe_wizard\`) is pattern-based (section 2b)."
+    echo "   Improve its rules so they work on ANY Mac by reasoning from sections 4-6:"
     echo "   classify each Library subfolder as SAFE (cache/log/updater/orphan), REVIEW (re-downloadable), or"
     echo "   PROTECTED (user data / sync / installed-app config)."
     echo "2. **Detect every installed program and map it to its data folders.** Use sections 3 and 5 to build a"
@@ -1057,7 +1148,7 @@ generate_feedback() {
     echo '```'
     echo "### Disk (df)"
     echo '```'
-    df -h /
+    df -h "$DATA_VOL"
     echo '```'
     echo "### APFS layout & purgeable space"
     echo '```'
@@ -1073,31 +1164,37 @@ generate_feedback() {
     echo ""; echo "---"; echo ""
     echo "## 2. CURRENT SCRIPT RULES (context for the improver)"
     echo ""
-    echo "### 2a. Current \`_match_folder\` heuristic"
+    echo "### 2a. Current \`_match_folder\` heuristic (informational only — never drives deletion)"
     echo '```'
     echo "lowercase the folder name, then:"
-    echo " 1) hit if it equals / contains / is-contained-by any installed bundle id"
-    echo " 2) else strip reverse-dns prefix to last token; hit if it matches any installed app name (token >=4 chars)"
-    echo " 3) else => ORPHAN?"
+    echo " 1) com.apple.* / group.com.apple.* => APPLE-SYSTEM"
+    echo " 2) exact equality with an installed bundle id => MATCHED"
+    echo " 3) strip a 10-char team-id prefix and one reverse-dns prefix (group/com/org/net/io/ai/im/md/dev),"
+    echo "    split into tokens; any token >=4 chars that equals a token of an installed app name or bundle id"
+    echo "    => MATCHED (segment match, never substring)"
+    echo " 4) else => ORPHAN?"
     echo '```'
-    echo "### 2b. Wizard SAFE list (hardcoded today)"
+    echo "### 2b. Wizard SAFE rules (pattern-based)"
     echo '```'
-    echo "~/Library/Caches (whole), ~/Library/Logs, ~/.Trash, ~/.cache"
-    echo "Claude: Cache, Code Cache, GPUCache, DawnWebGPUCache, DawnGraphiteCache, vm_bundles"
-    echo "VSCode: Cache, CachedData, CachedExtensionVSIXs, logs"
-    echo "JetBrains: Caches/JetBrains + per-IDE caches/ and log/"
-    echo "Updaters: draw.io-updater, manus-updater, qwen-updater, ms-playwright-go, waveterm-updater"
-    echo "Misc: Caches/aws, Spotify PersistentCache+cache, Comet, Google, SiriTTS"
-    echo "Leftovers (only if app NOT installed): .cursor .windsurf .trae .codeium .antigravity + App Support"
+    echo "~/Library/Caches/*, ~/Library/Logs/*, ~/Library/Saved Application State/* — each child >=1MB, one by one"
+    echo "  (children named *updater* / *.ShipIt are labelled as updater payloads)"
+    echo "~/.Trash ; Xcode DerivedData ; CoreSimulator/Caches"
+    echo "find ~/Library/Application Support + ~/Library/Containers, maxdepth 5, -prune at match, >=1MB:"
+    echo "  dir names Cache, Caches, Code Cache, *Cache, CachedData, CachedExtensionVSIXs, logs, Crashpad, tmp"
+    echo "Every candidate passes _wiz_protected() first (see 2d)."
     echo '```'
-    echo "### 2c. Wizard REVIEW list"
+    echo "### 2c. Wizard REVIEW rules"
     echo '```'
-    echo "~/.lmstudio/extensions ; ~/.lmstudio/models/* (per model)"
+    echo "~/.cache ; ~/.vscode/extensions ; ~/.lmstudio/extensions ; ~/.lmstudio/models/* (per model)"
+    echo "~/Applications/*.app (not symlinks) ; dot-folder leftovers ~/.cursor .windsurf .trae .codeium"
+    echo "  .antigravity .comet .manus .qwen .wispr .ollama — only if neither a matching .app nor CLI exists"
     echo '```'
-    echo "### 2d. PROTECTED (never offered) — keep & expand"
+    echo "### 2d. PROTECTED (_wiz_protected, case-insensitive substring on full path) — keep & expand"
     echo '```'
-    echo "OneDrive, iCloud(Mobile Documents), Dropbox, Google Drive(DriveFS/CloudStorage),"
-    echo "WhatsApp, Telegram, Photos, Mail, Documents/Pictures/Movies, installed-app preferences"
+    echo "*/com.apple.*, */group.com.apple.* ; OneDrive, Dropbox, Google Drive (incl. DriveFS), CloudStorage,"
+    echo "iCloud (Mobile Documents, CloudDocs), CloudKit, Box, pCloud, Nextcloud, Synology, MEGA ;"
+    echo "WhatsApp, Telegram ; Mail, Keychains, Photos ; Office (UBF8T346G9.Office) / Outlook"
+    echo "Out of scope by construction (never scanned): Documents, Desktop, Pictures, Movies, Preferences"
     echo '```'
   } >> "$FB"
 
@@ -1529,7 +1626,7 @@ _apps_result() {
   printf "  ${BGREEN}%d done${RESET}   ${DIM}%d skipped${RESET}   ${BRED}%d failed${RESET}\n" \
     "${1:-0}" "${2:-0}" "${3:-0}"
   [ "${4:-0}" -gt 0 ] && info "Reclaimed ~$(human_kb "$4") on the internal disk"
-  info "Free space now: $(df -h / | awk 'NR==2{print $4}')"
+  info "Free space now: $(df -h "$DATA_VOL" | awk 'NR==2{print $4}')"
   divider
   [ "${1:-0}" -gt 0 ] && APPS_DIRTY=1
   press_any_key
@@ -2055,7 +2152,6 @@ _relink_missing_apps() {
 # ══════════════════════════════════════════════════════════════
 vscode_manager() {
   local -a VARIANTS
-  local -a PATHS
   local -a LABELS
 
   VARIANTS=("$HOME/.vscode/extensions" "$HOME/.vscode-insiders/extensions" \
@@ -2063,11 +2159,11 @@ vscode_manager() {
             "$HOME/.cursor/extensions" "$HOME/.windsurf-next/extensions" \
             "$HOME/.windsurf/extensions" "$HOME/.trae/extensions" \
             "$HOME/.antigravity-ide/extensions" "$HOME/.devin/extensions" \
-            "$HOME/.positon/extensions" "$HOME/.kiro/extensions")
+            "$HOME/.positron/extensions" "$HOME/.kiro/extensions")
 
   LABELS=("VS Code" "VS Code Insiders" "VSCodium (1)" "VSCodium (2)" \
           "Cursor" "Windsurf (next)" "Windsurf" "Trae" \
-          "Antigravity IDE" "Devin" "Positon" "Kiro")
+          "Antigravity IDE" "Devin" "Positron" "Kiro")
 
   local found=0
   local idx=0
@@ -2077,7 +2173,6 @@ vscode_manager() {
 
   for var in "${VARIANTS[@]}"; do
     if [ -d "$var" ]; then
-      PATHS+=("$var")
       found=1
     fi
     ((idx++))
