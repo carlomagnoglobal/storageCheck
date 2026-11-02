@@ -369,6 +369,22 @@ DUP_I[1]=$(for ((j=1;j<=APP_N;j++)); do [ "${APP_NAME[$j]}" = Edge ] && echo $j;
 _usb_dupe_remove 1 >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 1 ] && [ -d "$VR/usbv/AppsOnExternal/Edge.app" ] && ok "remove refuses when the USB copy is the only real one" || bad "removed the only copy (rc=$rc)"
 DUP_EXT[1]="/tmp/NotOnUsb/Edge.app"; _usb_dupe_remove 1 >/dev/null 2>&1; [ $? -eq 1 ] && ok "remove refuses paths outside AppsOnExternal" || bad "accepted odd path"
+echo ""; echo "Applications Manager: where filter (Mac / USB / both)"
+rm -rf "$DUPSYS" "$VR"; mkdir -p "$DUPSYS" "$VR/usbv/AppsOnExternal"
+mkver "$DUPSYS/OnlyMac.app" 1.0 a
+mkver "$DUPSYS/Both.app" 1.0 b; mkver "$VR/usbv/AppsOnExternal/Both.app" 1.0 b
+mkver "$VR/usbv/AppsOnExternal/OnlyUsb.app" 1.0 c; ln -s "$VR/usbv/AppsOnExternal/OnlyUsb.app" "$DUPSYS/OnlyUsb.app"
+_apps_scan >/dev/null 2>&1
+APPS_SCOPE=all; _apps_clear_filters; APPS_PAGE=1; APPS_SORT=name
+names_for() { APPS_F_WHERE="$1"; _apps_view; local j out=""; for j in "${VIS[@]}"; do out="$out${APP_NAME[$j]} "; done; echo "${out% }"; }
+[ "$(names_for any)" = "Both OnlyMac OnlyUsb" ] && ok "where=anywhere lists all three" || bad "any: $(names_for any)"
+[ "$(names_for main)" = "OnlyMac" ] && ok "where=only on this Mac excludes apps that also have a USB copy" || bad "main: $(names_for main)"
+[ "$(names_for usb)" = "OnlyUsb" ] && ok "where=only on the USB lists launcher-linked apps" || bad "usb: $(names_for usb)"
+[ "$(names_for both)" = "Both" ] && ok "where=both lists apps on the Mac and the USB" || bad "both: $(names_for both)"
+APPS_F_WHERE=usb; [ "$(_apps_filter_summary)" = "only on the USB" ] && ok "filter summary names the location" || bad "summary: $(_apps_filter_summary)"
+_apps_clear_filters; [ "$APPS_F_WHERE" = any ] && ok "c clears the where filter" || bad "where not cleared"
+APPS_F_WHERE=any; _apps_next_where; a=$APPS_F_WHERE; _apps_next_where; b=$APPS_F_WHERE; _apps_next_where; c=$APPS_F_WHERE; _apps_next_where
+[ "$a $b $c $APPS_F_WHERE" = "main usb both any" ] && ok "w cycles main → usb → both → anywhere" || bad "cycle: $a $b $c $APPS_F_WHERE"
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

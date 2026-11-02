@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║      MAC STORAGE MANAGER v3.14 — by Claude                    ║
+# ║      MAC STORAGE MANAGER v3.15 — by Claude                    ║
 # ║      Audit · Analyze · Clean · Report · Wizard · Feedback    ║
 # ╚══════════════════════════════════════════════════════════════╝
 
@@ -320,7 +320,7 @@ _main_menu_draw() {
   clear
   echo ""
   echo -e "${BMAGENTA}╔══════════════════════════════════════════════════════════╗${RESET}"
-  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.14                         ║${RESET}"
+  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.15                         ║${RESET}"
   echo -e "${BMAGENTA}║     $(date '+%a %d %b %Y — %H:%M')                              ║${RESET}"
   echo -e "${BMAGENTA}╚══════════════════════════════════════════════════════════╝${RESET}"
   echo ""
@@ -406,7 +406,7 @@ _wiz_protected() {
 
 _wizard_header() {
   clear
-  echo -e "${BGREEN}${BOLD}🪄  SAFE CLEANUP WIZARD${RESET}  ${DIM}(v3.14 pattern engine)${RESET}"
+  echo -e "${BGREEN}${BOLD}🪄  SAFE CLEANUP WIZARD${RESET}  ${DIM}(v3.15 pattern engine)${RESET}"
   divider
   echo -e "  Offers only items that are ${BGREEN}safe by design${RESET}: caches, logs, temp & re-downloadables."
   echo -e "  It ${BRED}never${RESET} touches macOS system data, cloud sync, chats, mail, or your files."
@@ -1457,7 +1457,7 @@ generate_feedback() {
     echo ""
     echo "- Generated: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "- Host: $(hostname)"
-    echo "- Generator: storage_check.sh v3.14"
+    echo "- Generator: storage_check.sh v3.15"
     echo ""
     echo "---"
     echo ""
@@ -1775,6 +1775,7 @@ applications_manager() {
       p|P|left|up)    [ "$APPS_PAGE" -gt 1 ] && APPS_PAGE=$((APPS_PAGE-1)) ;;
       /)   echo ""; _apps_prompt_name ;;
       f|F) _apps_filter_panel ;;
+      w|W) _apps_next_where ;;
       c|C) _apps_clear_filters; APPS_PAGE=1 ;;
       s|S) case "$APPS_SORT" in
              size_desc) APPS_SORT="size_asc" ;;
@@ -1817,7 +1818,7 @@ _read_key() {
 }
 
 _apps_clear_filters() {
-  APPS_F_NAME=""; APPS_F_MINKB=0; APPS_F_USED=0; APPS_F_STATE="any"; APPS_F_RUN="any"
+  APPS_F_NAME=""; APPS_F_MINKB=0; APPS_F_USED=0; APPS_F_STATE="any"; APPS_F_RUN="any"; APPS_F_WHERE="any"
 }
 
 _apps_prompt_name() {
@@ -1839,11 +1840,24 @@ _parse_size_kb() {
     printf "%d\n", k }'
 }
 
+# any -> main -> usb -> both -> any
+_apps_next_where() {
+  case "${APPS_F_WHERE:-any}" in
+    any) APPS_F_WHERE="main" ;; main) APPS_F_WHERE="usb" ;; usb) APPS_F_WHERE="both" ;; *) APPS_F_WHERE="any" ;;
+  esac
+  APPS_PAGE=1
+}
+
 # Human labels for the filter values (screen header + filter panel).
 _apps_state_label() {
   case "$1" in
     ok) echo "removable" ;; admin) echo "admin-installed" ;; ext) echo "on external drive" ;;
     offline) echo "drive offline" ;; lock) echo "protected" ;; *) echo "any" ;;
+  esac
+}
+_apps_where_label() {
+  case "$1" in
+    main) echo "only on this Mac" ;; usb) echo "only on the USB" ;; both) echo "on this Mac AND the USB" ;; *) echo "anywhere" ;;
   esac
 }
 _apps_filter_summary() {
@@ -1854,6 +1868,7 @@ _apps_filter_summary() {
   [ "$APPS_F_USED" -eq -1 ]    && s="$s${sep}no usage record"
   [ "$APPS_F_STATE" != "any" ] && s="$s${sep}$(_apps_state_label "$APPS_F_STATE")"
   case "$APPS_F_RUN" in yes) s="$s${sep}running" ;; no) s="$s${sep}not running" ;; esac
+  [ "${APPS_F_WHERE:-any}" != "any" ] && s="$s${sep}$(_apps_where_label "$APPS_F_WHERE")"
   printf '%s' "${s#$sep}"
 }
 
@@ -1877,6 +1892,7 @@ _apps_filter_panel() {
     printf "  ${BCYAN}[e]${RESET} state           %s\n" "$(_apps_state_label "$APPS_F_STATE")"
     case "$APPS_F_RUN" in yes) v="running only" ;; no) v="not running" ;; *) v="any" ;; esac
     printf "  ${BCYAN}[o]${RESET} running         %s\n" "$v"
+    printf "  ${BCYAN}[w]${RESET} where           %s\n" "$(_apps_where_label "$APPS_F_WHERE")"
     echo ""
     echo -ne "  ${DIM}[c] clear all · Enter or [b] back to the list${RESET} ${BCYAN}›${RESET} "
     _read_key || break
@@ -1900,6 +1916,7 @@ _apps_filter_panel() {
              ext) APPS_F_STATE="offline" ;; offline) APPS_F_STATE="lock" ;; *) APPS_F_STATE="any" ;;
            esac ;;
       o|O) case "$APPS_F_RUN" in any) APPS_F_RUN="yes" ;; yes) APPS_F_RUN="no" ;; *) APPS_F_RUN="any" ;; esac ;;
+      w|W) _apps_next_where ;;
       c|C) _apps_clear_filters ;;
       ""|b|B|q|Q|esc) fp_loop=0 ;;
     esac
@@ -1912,7 +1929,7 @@ _apps_scan() {
   clear
   section "📱 APPLICATIONS MANAGER"
   APP_PATH=(); APP_NAME=(); APP_LNAME=(); APP_KB=(); APP_LOC=(); APP_STATE=(); APP_TARGET=()
-  APP_USED=(); APP_RUN=()
+  APP_USED=(); APP_RUN=(); APP_DUP=()
   APP_N=0; APPS_USED_OK=0
 
   local -a raw
@@ -1964,6 +1981,23 @@ _apps_scan() {
 
   _apps_sizes
   _apps_last_used
+  _apps_dups
+}
+
+# Flags APP_DUP[i]=1 for real bundles on this Mac that also have a copy under
+# <external volume>/AppsOnExternal. One volume listing, then one test per app.
+_apps_dups() {
+  local vols vname vavail i
+  local -a vnames
+  vols=$(_external_volumes)
+  [ -z "$vols" ] && return
+  while IFS=$'\t' read -r vname vavail; do [ -n "$vname" ] && vnames+=("$vname"); done <<< "$vols"
+  for ((i=1; i<=APP_N; i++)); do
+    case "${APP_STATE[$i]}" in ok|admin) ;; *) continue ;; esac
+    for vname in "${vnames[@]}"; do
+      if [ -d "$(_ext_apps_dir "$vname")/${APP_NAME[$i]}.app" ]; then APP_DUP[$i]=1; break; fi
+    done
+  done
 }
 
 # Pass 2 — sizes. Reads measure[] from _apps_scan. A row is re-sized only
@@ -2126,6 +2160,11 @@ _apps_view() {
     if [ "$APPS_F_STATE" != "any" ]; then
       _apps_state_of "$i"; [ "$APPS_ST" = "$APPS_F_STATE" ] || continue
     fi
+    case "${APPS_F_WHERE:-any}" in
+      main) case "${APP_STATE[$i]}" in ok|admin|lock) [ "${APP_DUP[$i]:-0}" -eq 1 ] && continue ;; *) continue ;; esac ;;
+      usb)  case "${APP_STATE[$i]}" in ext) ;; *) continue ;; esac ;;
+      both) [ "${APP_DUP[$i]:-0}" -eq 1 ] || continue ;;
+    esac
     case "$APPS_F_RUN" in
       yes) [ "${APP_RUN[$i]:-0}" -eq 1 ] || continue ;;
       no)  [ "${APP_RUN[$i]:-0}" -eq 1 ] && continue ;;
@@ -2247,6 +2286,7 @@ _apps_screen() {
       offline) state_cell="${BRED}↗ drive offline${RESET}" ;;
       *)       state_cell="${BGREEN}●${RESET}" ;;
     esac
+    [ "${APP_DUP[$i]:-0}" -eq 1 ] && state_cell="$state_cell ${BCYAN}+USB${RESET}"
     if [ "${APP_RUN[$i]:-0}" -eq 1 ]; then run_mark="${BGREEN}▶${RESET}"; else run_mark=" "; fi
     printf "  %3d  %s %s %b%-27.27s %-6s %b\n" \
       "$((pos+1))" "$(_size_cell "${APP_KB[$i]}")" "$(_used_cell "${APP_USED[$i]:--2}")" \
@@ -2260,7 +2300,7 @@ _apps_screen() {
 
 _apps_keybar() {
   echo ""
-  echo -e "  ${BCYAN}[d]${RESET}elete ${BCYAN}[m]${RESET}ove ${BCYAN}[r]${RESET}estore ${BCYAN}[x]${RESET}relink ${BCYAN}[u]${RESET}sb-dupes  ${DIM}·${RESET}  ${BCYAN}[f]${RESET}ilters ${BCYAN}[/]${RESET}name ${BCYAN}[c]${RESET}lear"
+  echo -e "  ${BCYAN}[d]${RESET}el ${BCYAN}[m]${RESET}ove ${BCYAN}[r]${RESET}estore ${BCYAN}[x]${RESET}relink ${BCYAN}[u]${RESET}sb-dup ${DIM}·${RESET} ${BCYAN}[f]${RESET}ilter ${BCYAN}[w]${RESET}here ${BCYAN}[/]${RESET}name ${BCYAN}[c]${RESET}lear"
   echo -ne "  ${DIM}←/→ page · [s]ort [t]scope [R]escan · [b]ack${RESET} ${BCYAN}›${RESET} "
 }
 
@@ -3397,7 +3437,7 @@ vscode_manager() {
 # ══════════════════════════════════════════════════════════════
 #   ENTRY
 # ══════════════════════════════════════════════════════════════
-VERSION="3.14"
+VERSION="3.15"
 
 _usage() {
   cat <<USAGE
