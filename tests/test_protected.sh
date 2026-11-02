@@ -337,6 +337,38 @@ rm -rf "$HOME/.ollama/models"; ln -s "$USB" "$HOME/.ollama/models"; MOVE_ARGS=""
 _ollama_models_to_usb >/dev/null 2>&1
 [ -z "$MOVE_ARGS" ] && ok "already-linked models: nothing to do" || bad "moved a link"
 rm -f "$HOME/.ollama/models"
+echo ""; echo "USB duplicates (remove / move & update)"
+DUPSYS="$FIX/dupapps"; VR="$FIX/vroot"; EXT_VOL_ROOT="$VR"; APPS_SYS_DIR="$DUPSYS"
+_external_volumes() { printf 'usbv\t99999999\n'; }
+mkver() { mkdir -p "$1/Contents"; printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleShortVersionString</key><string>%s</string></dict></plist>\n' "$2" > "$1/Contents/Info.plist"; echo "$3" > "$1/Contents/payload"; }
+mkver "$DUPSYS/Chrome.app" 131.0 new; mkver "$VR/usbv/AppsOnExternal/Chrome.app" 129.0 old
+mkver "$DUPSYS/Solo.app" 1.0 solo
+mkdir -p "$VR/usbv/AppsOnExternal"
+confirm() { return 0; }
+_apps_scan >/dev/null 2>&1; _usb_dupes_scan
+[ "$DUP_N" -eq 1 ] && [ "${APP_NAME[${DUP_I[1]}]}" = Chrome ] && ok "scan finds only the app present in both places" || bad "dupes: N=$DUP_N"
+[ "$(_ver_rel 131.0 129.0)" = newer ] && [ "$(_ver_rel 9.0 10.0)" = older ] && [ "$(_ver_rel 1 1)" = same ] && [ "$(_ver_rel "" 1)" = unknown ] && ok "_ver_rel compares versions numerically" || bad "_ver_rel"
+DRY_RUN=1; _usb_dupe_update 1 >/dev/null 2>&1; rc=$?; DRY_RUN=0
+[ "$rc" -eq 2 ] && [ ! -L "$DUPSYS/Chrome.app" ] && [ "$(cat "$VR/usbv/AppsOnExternal/Chrome.app/Contents/payload")" = old ] && ok "dry-run: update changes nothing" || bad "dry-run changed things"
+_usb_dupe_update 1 >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] && [ -L "$DUPSYS/Chrome.app" ] && [ "$(cat "$DUPSYS/Chrome.app/Contents/payload")" = new ] \
+  && [ "$(cat "$VR/usbv/AppsOnExternal/Chrome.app/Contents/payload")" = new ] && ok "update: USB copy replaced with this Mac's, internal is now a link" || bad "update rc=$rc"
+[ ! -e "$DUPSYS/Chrome.app.storagecheck-old" ] && ls "$VR/usbv/AppsOnExternal" | grep -q storagecheck && bad "temp copies left behind" || ok "no temporary copies left"
+_apps_scan >/dev/null 2>&1; _usb_dupes_scan
+[ "$DUP_N" -eq 0 ] && ok "after the update it is no longer a duplicate" || bad "still duplicate N=$DUP_N"
+
+# remove: needs a real copy on this Mac
+mkver "$DUPSYS/Edge.app" 2.0 e1; mkver "$VR/usbv/AppsOnExternal/Edge.app" 1.0 e0
+_apps_scan >/dev/null 2>&1; _usb_dupes_scan
+DRY_RUN=1; _usb_dupe_remove 1 >/dev/null 2>&1; DRY_RUN=0
+[ -d "$VR/usbv/AppsOnExternal/Edge.app" ] && ok "dry-run: remove keeps the USB copy" || bad "dry-run removed USB copy"
+_usb_dupe_remove 1 >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] && [ ! -e "$VR/usbv/AppsOnExternal/Edge.app" ] && [ -d "$DUPSYS/Edge.app" ] && ok "remove: USB copy gone, copy on this Mac untouched" || bad "remove rc=$rc"
+mkver "$VR/usbv/AppsOnExternal/Edge.app" 1.0 e0; rm -rf "$DUPSYS/Edge.app"; ln -s "$VR/usbv/AppsOnExternal/Edge.app" "$DUPSYS/Edge.app"
+DUP_I[1]=$(for ((j=1;j<=APP_N;j++)); do [ "${APP_NAME[$j]}" = Edge ] && echo $j; done); DUP_EXT[1]="$VR/usbv/AppsOnExternal/Edge.app"
+_usb_dupe_remove 1 >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 1 ] && [ -d "$VR/usbv/AppsOnExternal/Edge.app" ] && ok "remove refuses when the USB copy is the only real one" || bad "removed the only copy (rc=$rc)"
+DUP_EXT[1]="/tmp/NotOnUsb/Edge.app"; _usb_dupe_remove 1 >/dev/null 2>&1; [ $? -eq 1 ] && ok "remove refuses paths outside AppsOnExternal" || bad "accepted odd path"
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

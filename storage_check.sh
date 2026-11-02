@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║      MAC STORAGE MANAGER v3.13 — by Claude                    ║
+# ║      MAC STORAGE MANAGER v3.14 — by Claude                    ║
 # ║      Audit · Analyze · Clean · Report · Wizard · Feedback    ║
 # ╚══════════════════════════════════════════════════════════════╝
 
@@ -320,7 +320,7 @@ _main_menu_draw() {
   clear
   echo ""
   echo -e "${BMAGENTA}╔══════════════════════════════════════════════════════════╗${RESET}"
-  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.13                         ║${RESET}"
+  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.14                         ║${RESET}"
   echo -e "${BMAGENTA}║     $(date '+%a %d %b %Y — %H:%M')                              ║${RESET}"
   echo -e "${BMAGENTA}╚══════════════════════════════════════════════════════════╝${RESET}"
   echo ""
@@ -406,7 +406,7 @@ _wiz_protected() {
 
 _wizard_header() {
   clear
-  echo -e "${BGREEN}${BOLD}🪄  SAFE CLEANUP WIZARD${RESET}  ${DIM}(v3.13 pattern engine)${RESET}"
+  echo -e "${BGREEN}${BOLD}🪄  SAFE CLEANUP WIZARD${RESET}  ${DIM}(v3.14 pattern engine)${RESET}"
   divider
   echo -e "  Offers only items that are ${BGREEN}safe by design${RESET}: caches, logs, temp & re-downloadables."
   echo -e "  It ${BRED}never${RESET} touches macOS system data, cloud sync, chats, mail, or your files."
@@ -1457,7 +1457,7 @@ generate_feedback() {
     echo ""
     echo "- Generated: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "- Host: $(hostname)"
-    echo "- Generator: storage_check.sh v3.13"
+    echo "- Generator: storage_check.sh v3.14"
     echo ""
     echo "---"
     echo ""
@@ -1792,6 +1792,7 @@ applications_manager() {
       m|M) echo ""; _move_app_to_usb ;;
       r)   echo ""; _restore_app_from_usb ;;
       x|X) echo ""; _relink_missing_apps ;;
+      u|U) _usb_duplicates ;;
       b|B|q|Q|esc) am_loop=0 ;;
       "") ;;   # bare Enter just redraws
       *) echo ""; warning "Invalid key — try one of the keys shown"; sleep 1 ;;
@@ -2259,7 +2260,7 @@ _apps_screen() {
 
 _apps_keybar() {
   echo ""
-  echo -e "  ${BCYAN}[d]${RESET}elete ${BCYAN}[m]${RESET}ove ${BCYAN}[r]${RESET}estore ${BCYAN}[x]${RESET}relink  ${DIM}·${RESET}  ${BCYAN}[f]${RESET}ilters ${BCYAN}[/]${RESET}name ${BCYAN}[c]${RESET}lear"
+  echo -e "  ${BCYAN}[d]${RESET}elete ${BCYAN}[m]${RESET}ove ${BCYAN}[r]${RESET}estore ${BCYAN}[x]${RESET}relink ${BCYAN}[u]${RESET}sb-dupes  ${DIM}·${RESET}  ${BCYAN}[f]${RESET}ilters ${BCYAN}[/]${RESET}name ${BCYAN}[c]${RESET}lear"
   echo -ne "  ${DIM}←/→ page · [s]ort [t]scope [R]escan · [b]ack${RESET} ${BCYAN}›${RESET} "
 }
 
@@ -2910,6 +2911,192 @@ _move_app_to_usb() {
 }
 
 # ══════════════════════════════════════════════════════════════
+#   APPS INSTALLED ON THIS MAC *AND* ON THE USB
+# ══════════════════════════════════════════════════════════════
+# Typical case: Chrome auto-updated on this Mac while an older copy sits on the
+# drive. Two actions: remove the USB copy, or replace it with this Mac's
+# version and turn the internal app into a launcher link.
+_ext_apps_dir() { echo "${EXT_VOL_ROOT:-/Volumes}/$1/AppsOnExternal"; }
+_app_version() { plutil -extract CFBundleShortVersionString raw "$1/Contents/Info.plist" 2>/dev/null; }
+# Version $1 relative to $2: newer | older | same | unknown
+_ver_rel() {
+  local a="$1" b="$2" top
+  { [ -n "$a" ] && [ -n "$b" ]; } || { echo unknown; return; }
+  [ "$a" = "$b" ] && { echo same; return; }
+  top=$(printf '%s\n%s\n' "$a" "$b" | sort -V | tail -1)
+  if [ "$top" = "$a" ]; then echo newer; else echo older; fi
+}
+# _maybe_sudo <0|1> cmd args... : runs the command with sudo when flag is 1
+_maybe_sudo() { local s="$1"; shift; if [ "$s" -eq 1 ]; then sudo "$@"; else "$@"; fi; }
+
+# Fills DUP_I/DUP_EXT/DUP_VOL[1..DUP_N] from the cached app scan: real (not
+# linked) bundles that also exist under <volume>/AppsOnExternal.
+_usb_dupes_scan() {
+  DUP_I=(); DUP_EXT=(); DUP_VOL=(); DUP_N=0
+  local vols vname vavail i ext
+  vols=$(_external_volumes)
+  [ -z "$vols" ] && return
+  for ((i=1; i<=APP_N; i++)); do
+    case "${APP_STATE[$i]}" in ok|admin) ;; *) continue ;; esac
+    [ -L "${APP_PATH[$i]}" ] && continue
+    while IFS=$'\t' read -r vname vavail; do
+      [ -z "$vname" ] && continue
+      ext="$(_ext_apps_dir "$vname")/${APP_NAME[$i]}.app"
+      if [ -d "$ext" ] && [ ! -L "$ext" ]; then
+        DUP_N=$((DUP_N+1)); DUP_I[$DUP_N]=$i; DUP_EXT[$DUP_N]="$ext"; DUP_VOL[$DUP_N]="$vname"
+      fi
+    done <<< "$vols"
+  done
+}
+
+# Remove the USB copy of duplicate #$1. Only allowed while a real copy remains
+# on this Mac. Goes to the drive's Trash (undoable); sets UD_FREED/UD_TRASHED.
+# Returns 0 done, 1 failed, 2 skipped.
+_usb_dupe_remove() {
+  local k="$1" app="${APP_PATH[${DUP_I[$1]}]}" ext="${DUP_EXT[$1]}" kb vi ve
+  UD_FREED=0; UD_TRASHED=0
+  _dry_block "removing the USB copy of $(basename "$ext")" && return 2
+  case "$ext" in */AppsOnExternal/*.app) ;; *) danger "Unexpected path '$ext' — refusing"; return 1 ;; esac
+  if [ ! -d "$app" ] || [ -L "$app" ]; then
+    danger "$(basename "$ext"): no real copy on this Mac — the USB copy is the only one, keeping it"; return 1
+  fi
+  { [ -d "$ext" ] && [ ! -L "$ext" ]; } || { skipped "USB copy is gone"; return 2; }
+  kb=$(du -sk "$ext" 2>/dev/null | cut -f1); kb=${kb:-0}
+  vi=$(_app_version "$app"); ve=$(_app_version "$ext")
+  confirm "Remove the USB copy of $(basename "$ext" .app) (${ve:-?}, $(human_kb "$kb")) from '${DUP_VOL[$k]}'? This Mac keeps ${vi:-its} version." || { skipped "Kept the USB copy"; return 2; }
+  _remove_undoable "$ext" "$kb" "$(basename "$ext") (USB copy)" || return 1
+  UD_FREED=$RM_FREED; UD_TRASHED=$RM_TRASHED
+  return 0
+}
+
+# Replace the USB copy of duplicate #$1 with this Mac's app, then turn the
+# internal app into a launcher link. Nothing is deleted until the new USB copy
+# is verified and the link works. Sets UD_FREED (internal KB). 0 done / 1 failed / 2 skipped.
+_usb_dupe_update() {
+  local k="$1" i="${DUP_I[$1]}"
+  local app="${APP_PATH[$i]}" ext="${DUP_EXT[$1]}" name; name=$(basename "$app")
+  local new="$ext.storagecheck-new" oldx="$ext.storagecheck-old" oldi="$app.storagecheck-old"
+  local kb avail vi ve rel use_sudo=0 got
+  UD_FREED=0
+  _dry_block "updating the USB copy of $name" && return 2
+  case "$ext" in */AppsOnExternal/*.app) ;; *) danger "Unexpected path '$ext' — refusing"; return 1 ;; esac
+  { [ -d "$app" ] && [ ! -L "$app" ]; } || { skipped "$name on this Mac is not a real app (already a link?)"; return 2; }
+  { [ -d "$ext" ] && [ ! -L "$ext" ]; } || { skipped "$name has no USB copy to update"; return 2; }
+  if [ -e "$new" ] || [ -e "$oldx" ] || [ -e "$oldi" ]; then
+    danger "$name: leftovers from an earlier attempt ($new / $oldx / $oldi) — resolve them first"; return 1
+  fi
+  if [ "${APP_RUN[$i]:-0}" -eq 1 ]; then
+    warning "$name is running — quit it first for a clean copy."
+    confirm "Continue anyway?" || { skipped "Skipped $name"; return 2; }
+  fi
+  vi=$(_app_version "$app"); ve=$(_app_version "$ext"); rel=$(_ver_rel "$vi" "$ve")
+  if [ "$rel" = "older" ]; then
+    warning "$name on this Mac (${vi}) is OLDER than the USB copy (${ve})."
+    confirm "Replace the newer USB copy with the older one anyway?" || { skipped "Skipped $name"; return 2; }
+  fi
+  kb=$(du -sk "$app" 2>/dev/null | cut -f1); kb=${kb:-0}
+  avail=$(df -k "$(dirname "$ext")" 2>/dev/null | awk 'NR==2{print $4}')
+  if [ "${avail:-0}" -le "$kb" ]; then
+    danger "$name needs $(human_kb "$kb") free on the drive for the new copy (only $(human_kb "${avail:-0}") free)"; return 1
+  fi
+  if ! _app_removable "$app"; then
+    warning "$name was installed with admin rights (root-owned files)."
+    confirm "Complete the move with your admin password (sudo)?" && use_sudo=1 || { skipped "Skipped $name"; return 2; }
+  fi
+  confirm "Replace the USB copy of $name (${ve:-?}) with this Mac's (${vi:-?}) and link it back?" || { skipped "Skipped $name"; return 2; }
+
+  echo -n "  Copying $name ($(human_kb "$kb")) to the drive... "
+  if ! ditto "$app" "$new" 2>/dev/null || [ "$(_tree_fingerprint "$app")" != "$(_tree_fingerprint "$new")" ]; then
+    echo -e "${BRED}failed${RESET}"
+    danger "Copy incomplete — both existing copies are untouched."
+    [ -e "$new" ] && rm -rf "$new"
+    return 1
+  fi
+  echo -e "${BGREEN}verified${RESET}"
+
+  PENDING_MSG="'$name': new verified copy is at '$new' (or '$ext'); older USB copy at '$oldx'; the app on this Mac is '$app' or '$oldi'. Nothing is lost — rename back whichever is missing."
+  if ! mv "$ext" "$oldx" 2>/dev/null; then
+    [ -e "$new" ] && rm -rf "$new"; PENDING_MSG=""; danger "Could not set the old USB copy aside — nothing changed."; return 1
+  fi
+  if ! mv "$new" "$ext" 2>/dev/null; then
+    mv "$oldx" "$ext" 2>/dev/null; [ -e "$new" ] && rm -rf "$new"; PENDING_MSG=""
+    danger "Could not put the new copy in place — old USB copy restored."; return 1
+  fi
+  if ! _maybe_sudo "$use_sudo" mv "$app" "$oldi" 2>/dev/null; then
+    [ -e "$oldx" ] && rm -rf "$oldx"; PENDING_MSG=""
+    danger "USB copy updated, but '$name' on this Mac could not be replaced by a link — it stays as is."; return 1
+  fi
+  if ! _maybe_sudo "$use_sudo" ln -s "$ext" "$app" 2>/dev/null; then
+    _maybe_sudo "$use_sudo" mv "$oldi" "$app" 2>/dev/null; PENDING_MSG=""
+    danger "Could not create the launcher link — '$name' restored on this Mac (USB copy is updated)."; return 1
+  fi
+  PENDING_MSG=""
+  [ -e "$oldx" ] && rm -rf "$oldx"
+  if [ "$use_sudo" -eq 1 ]; then [ -e "$oldi" ] && sudo rm -rf "$oldi"; got=$kb
+  else got=$(_rm_tracked "$oldi" "$kb"); fi
+  UD_FREED=${got:-0}
+  if [ -e "$oldi" ]; then warning "$name moved, but part of the old internal copy remains at $oldi (delete it yourself)"
+  else success "$name: USB copy updated to ${vi:-the Mac version}; internal copy freed $(human_kb "${got:-0}")"; fi
+  return 0
+}
+
+# Interactive part: pick duplicate numbers, run one action over them.
+_usb_dupe_act() {
+  local mode="$1" sel rc ok=0 skip=0 fail=0 freed=0 trashed=0 k
+  echo -ne "\n  ${BCYAN}Number(s) ${DIM}(e.g. 1 or 1,3)${RESET}${BCYAN}, blank to cancel: ${RESET}"
+  read -r sel
+  [ -z "$sel" ] && { skipped "Cancelled"; return; }
+  local -a picks; picks=($(_parse_selection "$sel" "$DUP_N"))
+  [ "${#picks[@]}" -eq 0 ] && { warning "No valid selection"; press_any_key; return; }
+  for k in "${picks[@]}"; do
+    if [ "$mode" = remove ]; then _usb_dupe_remove "$k"; else _usb_dupe_update "$k"; fi
+    rc=$?
+    case $rc in 0) ok=$((ok+1)); freed=$((freed+UD_FREED)); trashed=$((trashed+${UD_TRASHED:-0})) ;; 1) fail=$((fail+1)) ;; *) skip=$((skip+1)) ;; esac
+  done
+  _apps_result "$ok" "$skip" "$fail" "$freed" 0
+  [ "$trashed" -gt 0 ] && info "$(human_kb "$trashed") sits in the USB drive's Trash — empty it to free the space on the drive."
+}
+
+_usb_duplicates() {
+  local k i ext vi ve rel tag ekb
+  while true; do
+    clear
+    section "🔁 APPS ON THIS MAC AND ON THE USB"
+    _usb_dupes_scan
+    if [ "$DUP_N" -eq 0 ]; then
+      info "No app exists both on this Mac and on a mounted external drive."
+      press_any_key; return
+    fi
+    _apps_running
+    printf "  ${DIM}%3s  %-24s %-12s %-12s %s${RESET}\n" "#" "NAME" "THIS MAC" "USB" "COMPARE"
+    divider
+    for ((k=1; k<=DUP_N; k++)); do
+      i=${DUP_I[$k]}; ext="${DUP_EXT[$k]}"
+      vi=$(_app_version "${APP_PATH[$i]}"); ve=$(_app_version "$ext"); rel=$(_ver_rel "$vi" "$ve")
+      case "$rel" in
+        newer) tag="${BGREEN}this Mac is newer${RESET}" ;;
+        older) tag="${BYELLOW}USB is newer${RESET}" ;;
+        same)  tag="${DIM}same version${RESET}" ;;
+        *)     tag="${DIM}version unknown${RESET}" ;;
+      esac
+      printf "  %3d  %-24.24s %-12.12s %-12.12s %b ${DIM}[%s]${RESET}\n" "$k" "${APP_NAME[$i]}" "${vi:-?}" "${ve:-?}" "$tag" "${DUP_VOL[$k]}"
+    done
+    divider
+    echo ""
+    echo -e "  ${BCYAN}[e]${RESET} remove the USB copy   ${BCYAN}[u]${RESET} move & update: replace the USB copy with this Mac's"
+    echo -ne "  ${DIM}[b]ack${RESET} ${BCYAN}›${RESET} "
+    _read_key || return
+    case "$KEY" in
+      e|E) echo ""; _usb_dupe_act remove ;;
+      u|U) echo ""; _usb_dupe_act update ;;
+      b|B|q|Q|esc) return ;;
+      "") ;;
+      *) echo ""; warning "Invalid key"; sleep 1 ;;
+    esac
+  done
+}
+
+# ══════════════════════════════════════════════════════════════
 #   RESTORE APP FROM USB DRIVE
 # ══════════════════════════════════════════════════════════════
 _restore_app_from_usb() {
@@ -3210,7 +3397,7 @@ vscode_manager() {
 # ══════════════════════════════════════════════════════════════
 #   ENTRY
 # ══════════════════════════════════════════════════════════════
-VERSION="3.13"
+VERSION="3.14"
 
 _usage() {
   cat <<USAGE
