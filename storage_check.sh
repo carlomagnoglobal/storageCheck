@@ -2560,6 +2560,22 @@ _move_path_to_usb() {
   return 0
 }
 
+# Points LM Studio's "downloadsFolder" (in ~/.lmstudio/settings.json) at the
+# models' new location. Backs the file up first; only touches that one key, and
+# only when it currently holds the old path. Returns 0 changed, 1 not changed.
+_lmstudio_repoint() {
+  local old="${1%/}" new="${2%/}" f="$HOME/.lmstudio/settings.json"
+  [ -f "$f" ] && [ -n "$old" ] && [ -n "$new" ] || return 1
+  _dry_block "editing LM Studio settings" && return 1
+  case "$new" in *'|'*|*'&'*|*'\'*|*'"'*) warning "Path has characters I won't write into JSON — set it in LM Studio > My Models > folder"; return 1 ;; esac
+  grep -q "\"downloadsFolder\": \"$old\"" "$f" || { info "LM Studio's models folder is not set to $old — left alone"; return 1; }
+  cp "$f" "$f.storagecheck-bak" || return 1
+  sed -i '' "s|\"downloadsFolder\": \"$old\"|\"downloadsFolder\": \"$new\"|" "$f" \
+    && grep -q "\"downloadsFolder\": \"$new\"" "$f" \
+    && { success "LM Studio models folder → $new ${DIM}(backup: settings.json.storagecheck-bak)${RESET}"; return 0; }
+  cp "$f.storagecheck-bak" "$f"; warning "Could not edit settings.json — restored it"; return 1
+}
+
 # One status line per target; sets AIT_STATE: local | linked | missing | none
 _ait_status() {
   local p="$1"
@@ -2641,6 +2657,19 @@ ai_to_usb() {
     _move_path_to_usb "${T_PATH[$i]}" "/Volumes/$vol/${T_DIR[$i]}"; rc=$?
     case $rc in 0) ok=$((ok+1)) ;; 1) fail=$((fail+1)) ;; *) skip=$((skip+1)) ;; esac
   done
+  # Config follow-up. The link at the old path normally suffices; some tools
+  # resolve or store the path, so offer to point them at the new real location.
+  local lmm="$HOME/.lmstudio/models"
+  if [ -L "$lmm" ] && [ -f "$HOME/.lmstudio/settings.json" ] && grep -q "\"downloadsFolder\": \"$lmm\"" "$HOME/.lmstudio/settings.json"; then
+    echo ""
+    pgrep -ix "LM Studio" >/dev/null 2>&1 && warning "Quit LM Studio first, or it may overwrite the setting."
+    confirm "Also set LM Studio's models folder to $(readlink "$lmm")?" && _lmstudio_repoint "$lmm" "$(readlink "$lmm")"
+  fi
+  if [ -L "$HOME/.ollama/models" ]; then
+    echo ""
+    info "Ollama follows the link at ~/.ollama/models, so it needs no setting. If it ever says 'no models':"
+    echo -e "  ${DIM}launchctl setenv OLLAMA_MODELS \"$(readlink "$HOME/.ollama/models")\"   (then restart the Ollama app)${RESET}"
+  fi
   echo ""; divider
   echo -e "  Moved ${BGREEN}$ok${RESET} · skipped $skip · failed ${BRED}$fail${RESET} · freed ${BOLD}$(human_kb "$MOVED_KB")${RESET}"
   [ "$ok" -gt 0 ] && info "Restart Ollama / LM Studio so they pick up the link. To undo: delete the link and copy the folder back from the drive."

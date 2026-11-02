@@ -160,6 +160,17 @@ _move_path_to_usb "$HOME/nonexistent" "$USB/x" >/dev/null 2>&1; [ $? -eq 2 ] && 
 _move_path_to_usb "$HOME/Library/Application Support/OneDrive" "$USB/x" >/dev/null 2>&1; [ $? -eq 2 ] && [ ! -L "$HOME/Library/Application Support/OneDrive" ] && ok "protected path refused" || bad "protected path moved"
 _move_path_to_usb "" "$USB/x" >/dev/null 2>&1; [ $? -eq 1 ] && ok "empty source refused" || bad "empty source accepted"
 
+echo ""; echo "_lmstudio_repoint"
+mkdir -p "$HOME/.lmstudio"; printf '{\n  "downloadsFolder": "%s",\n  "other": 1\n}\n' "$HOME/.lmstudio/models" > "$HOME/.lmstudio/settings.json"
+DRY_RUN=1; _lmstudio_repoint "$HOME/.lmstudio/models" "$USB/lm/models" >/dev/null 2>&1; DRY_RUN=0
+grep -q "$HOME/.lmstudio/models" "$HOME/.lmstudio/settings.json" && ok "dry-run leaves settings.json alone" || bad "dry-run edited settings"
+_lmstudio_repoint "$HOME/.lmstudio/models" "$USB/lm/models" >/dev/null 2>&1
+grep -q "\"downloadsFolder\": \"$USB/lm/models\"" "$HOME/.lmstudio/settings.json" && grep -q '"other": 1' "$HOME/.lmstudio/settings.json" \
+  && ok "downloadsFolder repointed, other keys intact" || bad "settings.json wrong: $(cat "$HOME/.lmstudio/settings.json")"
+grep -q "$HOME/.lmstudio/models" "$HOME/.lmstudio/settings.json.storagecheck-bak" && ok "backup holds the old value" || bad "no backup"
+_lmstudio_repoint "$HOME/.lmstudio/models" "$USB/other" >/dev/null 2>&1 && bad "edited although the key no longer held the old path" || ok "left alone when the key holds another path"
+_lmstudio_repoint "$HOME/x" 'bad|path' >/dev/null 2>&1 && bad "accepted unsafe path" || ok "unsafe characters refused"
+
 echo ""; echo "_du_batch"
 mk "sz/a b"; mk "sz/trail" 1024
 DU_PATHS=("$HOME/sz/a b" "" "$HOME/sz/missing" "$HOME/sz/trail/" "$HOME/sz/a b")
