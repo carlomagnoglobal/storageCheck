@@ -161,6 +161,7 @@ mk "Library/Application Support/JetBrains/IntelliJIdea2025.1" 12288
 mk "Library/Application Support/JetBrains/Toolbox" 12288
 mk ".nvm/versions/node/v18.0.0" 12288; mk ".nvm/versions/node/v22.0.0" 12288
 mk ".local/share/bigtool" 204800
+mk "Library/Developer/Xcode/CodingAssistant" 12288
 mk ".mysterytool" 204800; mk ".ssh" 204800
 _wizard_collect >/dev/null 2>&1
 tier_of() { local c t kb p l n; for c in "${CANDIDATES[@]}"; do IFS='|' read -r t kb p l n <<< "$c"; [ "$p" = "$HOME/$1" ] && { echo "$t"; return; }; done; echo none; }
@@ -176,6 +177,7 @@ tier_of() { local c t kb p l n; for c in "${CANDIDATES[@]}"; do IFS='|' read -r 
 [ "$(tier_of .nvm/versions/node/v18.0.0)" = REVIEW ] && [ "$(tier_of .nvm/versions/node/v22.0.0)" = none ] && ok "old nvm Node REVIEW, newest kept" || bad "nvm: v18=$(tier_of .nvm/versions/node/v18.0.0) v22=$(tier_of .nvm/versions/node/v22.0.0)"
 [ "$(tier_of .local/share/bigtool)" = REVIEW ] && ok "~/.local/share child is REVIEW" || bad "local/share: $(tier_of .local/share/bigtool)"
 [ "$(tier_of .mysterytool)" = REVIEW ] && ok "big unknown dot-folder is REVIEW" || bad "dot-folder: $(tier_of .mysterytool)"
+[ "$(tier_of Library/Developer/Xcode/CodingAssistant)" = REVIEW ] && ok "Xcode CodingAssistant is REVIEW" || bad "CodingAssistant: $(tier_of Library/Developer/Xcode/CodingAssistant)"
 [ "$(tier_of .ssh)" = none ] && ok ".ssh never offered" || bad ".ssh offered"
 
 echo ""; echo "_owner_running"

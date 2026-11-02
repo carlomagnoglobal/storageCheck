@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║      MAC STORAGE MANAGER v3.10 — by Claude                    ║
+# ║      MAC STORAGE MANAGER v3.11 — by Claude                    ║
 # ║      Audit · Analyze · Clean · Report · Wizard · Feedback    ║
 # ╚══════════════════════════════════════════════════════════════╝
 
@@ -319,7 +319,7 @@ _main_menu_draw() {
   clear
   echo ""
   echo -e "${BMAGENTA}╔══════════════════════════════════════════════════════════╗${RESET}"
-  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.10                         ║${RESET}"
+  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.11                         ║${RESET}"
   echo -e "${BMAGENTA}║     $(date '+%a %d %b %Y — %H:%M')                              ║${RESET}"
   echo -e "${BMAGENTA}╚══════════════════════════════════════════════════════════╝${RESET}"
   echo ""
@@ -404,7 +404,7 @@ _wiz_protected() {
 
 _wizard_header() {
   clear
-  echo -e "${BGREEN}${BOLD}🪄  SAFE CLEANUP WIZARD${RESET}  ${DIM}(v3.10 pattern engine)${RESET}"
+  echo -e "${BGREEN}${BOLD}🪄  SAFE CLEANUP WIZARD${RESET}  ${DIM}(v3.11 pattern engine)${RESET}"
   divider
   echo -e "  Offers only items that are ${BGREEN}safe by design${RESET}: caches, logs, temp & re-downloadables."
   echo -e "  It ${BRED}never${RESET} touches macOS system data, cloud sync, chats, mail, or your files."
@@ -602,6 +602,7 @@ _wizard_collect() {
   for d in "$HOME/Library/Developer/Xcode/"*" DeviceSupport"/*; do
     add_candidate REVIEW "$d" "Xcode device support · $(basename "$d")" "Re-copied from the device when it next connects" 1024
   done
+  add_candidate REVIEW "$HOME/Library/Developer/Xcode/CodingAssistant" "Xcode · Coding Assistant model" "Downloaded model, re-downloaded when you use it" 10240
   add_candidate REVIEW "$HOME/Library/Developer/Xcode/Archives" "Xcode · Archives"     "Old app builds — only needed to re-ship or symbolicate them" 1024
   add_candidate REVIEW "$HOME/.npm/_cacache"                    "npm cache"            "Re-downloaded on next install" 1024
   add_candidate REVIEW "$HOME/Library/pnpm/store"               "pnpm store"           "Re-downloaded on next install" 1024
@@ -1320,6 +1321,28 @@ storage_visualizer() {
 # ══════════════════════════════════════════════════════════════
 #   RECOMMENDATIONS ENGINE
 # ══════════════════════════════════════════════════════════════
+# Read-only: lists installed simulator runtimes (the real Xcode space hog) with
+# sizes, flags duplicate OS versions, and prints the delete command — it never
+# runs one. Runtimes are Apple-managed disk images, so only simctl removes them.
+_sim_runtimes_tip() {
+  command -v xcrun >/dev/null 2>&1 || return 1
+  local out line name id size seen=" " n=0 dups=0
+  out=$(xcrun simctl runtime list -v 2>/dev/null) || return 1
+  while IFS= read -r line; do
+    case "$line" in
+      "== "*|"-- "*|"Total"*|"") continue ;;
+      " "*) case "$line" in *"Size:"*) size=${line##*Size: }; [ -n "$id" ] && {
+              local dup=""; case "$seen" in *"|$name|"*) dup=" ${BYELLOW}(duplicate OS version)${RESET}"; dups=$((dups+1)) ;; esac
+              seen="$seen|$name|"; n=$((n+1))
+              echo -e "     ${size}\t$name ${DIM}xcrun simctl runtime delete $id${RESET}$dup"; id=""; } ;; esac ;;
+      *" - "*) name=${line%% (*}; id=${line##* - }; id=${id%% *} ;;
+    esac
+  done <<< "$out"
+  [ "$n" -gt 0 ] || return 1
+  echo -e "     ${DIM}Re-downloadable any time (Xcode > Settings > Components). Delete only the platforms you do not build for.${RESET}"
+  return 0
+}
+
 _print_recommendations() {
   local found=0
   local cache_kb=$(du -sk ~/Library/Caches 2>/dev/null|cut -f1)
@@ -1336,6 +1359,10 @@ _print_recommendations() {
   local sims="$HOME/Library/Developer/CoreSimulator/Devices"
   [ -d "$sims" ] && command -v xcrun >/dev/null 2>&1 && \
     { info "iOS simulators: $(du -sh "$sims" 2>/dev/null|cut -f1) — 'xcrun simctl delete unavailable' removes outdated ones"; found=1; }
+  if command -v xcrun >/dev/null 2>&1 && [ -d /Library/Developer/CoreSimulator ]; then
+    info "Simulator runtimes (largest Xcode cost):"
+    _sim_runtimes_tip && found=1
+  fi
   [ "$found" -eq 0 ] && success "Looks clean! 🎉"
 }
 
@@ -1427,7 +1454,7 @@ generate_feedback() {
     echo ""
     echo "- Generated: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "- Host: $(hostname)"
-    echo "- Generator: storage_check.sh v3.10"
+    echo "- Generator: storage_check.sh v3.11"
     echo ""
     echo "---"
     echo ""
@@ -2963,7 +2990,7 @@ vscode_manager() {
 # ══════════════════════════════════════════════════════════════
 #   ENTRY
 # ══════════════════════════════════════════════════════════════
-VERSION="3.10"
+VERSION="3.11"
 
 _usage() {
   cat <<USAGE
