@@ -138,6 +138,28 @@ got=$(_rm_tracked "$HOME/locked" 2048); rc=$?
 chmod 700 "$HOME/locked"
 [ "$rc" -ne 0 ] && [ "$got" -lt 2048 ] && ok "_rm_tracked reports partial failure" || bad "_rm_tracked hid a failed delete (rc=$rc got=$got)"
 
+echo ""; echo "_move_path_to_usb"
+USB="$FIX/usbvol"; mkdir -p "$USB"
+mk ".ollama/models/blobs" 4096; echo manifest > "$HOME/.ollama/models/manifest"; ln -s blobs "$HOME/.ollama/models/alias"
+DRY_RUN=1; _move_path_to_usb "$HOME/.ollama/models" "$USB/AIOnExternal/ollama" >/dev/null 2>&1; rc=$?; DRY_RUN=0
+[ "$rc" -eq 2 ] && [ ! -L "$HOME/.ollama/models" ] && [ ! -e "$USB/AIOnExternal" ] && ok "dry-run moves nothing" || bad "dry-run moved (rc=$rc)"
+MOVED_KB=0
+_move_path_to_usb "$HOME/.ollama/models" "$USB/AIOnExternal/ollama" >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] && [ -L "$HOME/.ollama/models" ] && [ "$(readlink "$HOME/.ollama/models")" = "$USB/AIOnExternal/ollama/models" ] \
+  && ok "models moved, original path is now a link to the drive" || bad "move failed rc=$rc"
+[ -f "$HOME/.ollama/models/blobs/blob" ] && [ "$(cat "$HOME/.ollama/models/manifest")" = manifest ] && [ -L "$USB/AIOnExternal/ollama/models/alias" ] \
+  && ok "content readable through the link (incl. inner symlink)" || bad "content missing through link"
+[ ! -e "$HOME/.ollama/models.storagecheck-old" ] && [ "$MOVED_KB" -ge 4096 ] && ok "original removed after the link worked, freed KB reported" || bad "old copy left or MOVED_KB=$MOVED_KB"
+[ -f "$HOME/.ollama/config.json" ] || echo x > "$HOME/.ollama/id_ed25519"; [ -f "$HOME/.ollama/id_ed25519" ] && ok "sibling files (keys) stay local" || bad "sibling lost"
+_move_path_to_usb "$HOME/.ollama/models" "$USB/AIOnExternal/ollama" >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 2 ] && ok "already-linked path is skipped" || bad "re-move rc=$rc"
+mk "mv/two" 1024; mkdir -p "$USB/exists/two"
+_move_path_to_usb "$HOME/mv/two" "$USB/exists" >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 2 ] && [ -d "$HOME/mv/two" ] && [ ! -L "$HOME/mv/two" ] && ok "existing destination is never overwritten" || bad "overwrote destination (rc=$rc)"
+_move_path_to_usb "$HOME/nonexistent" "$USB/x" >/dev/null 2>&1; [ $? -eq 2 ] && ok "missing source skipped" || bad "missing source"
+_move_path_to_usb "$HOME/Library/Application Support/OneDrive" "$USB/x" >/dev/null 2>&1; [ $? -eq 2 ] && [ ! -L "$HOME/Library/Application Support/OneDrive" ] && ok "protected path refused" || bad "protected path moved"
+_move_path_to_usb "" "$USB/x" >/dev/null 2>&1; [ $? -eq 1 ] && ok "empty source refused" || bad "empty source accepted"
+
 echo ""; echo "_du_batch"
 mk "sz/a b"; mk "sz/trail" 1024
 DU_PATHS=("$HOME/sz/a b" "" "$HOME/sz/missing" "$HOME/sz/trail/" "$HOME/sz/a b")

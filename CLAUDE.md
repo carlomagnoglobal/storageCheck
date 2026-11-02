@@ -42,8 +42,9 @@ The menu is grouped into ANALYZE / CLEAN / MANAGE / TOOLS. **Menu numbers have b
 | 12 | Manage | `vscode_manager` | VSCode extensions: browse, delete, backup |
 | 13 | Manage | `lmstudio_manager` | LM Studio model/extension inventory + optional deletion |
 | 14 | Manage | `ollama_manager` | Ollama model management |
-| 15 | Tools | `save_report` | Dumps a plain-text snapshot to `~/storage_report_<timestamp>.txt` |
-| 16 | Tools | `generate_feedback` | Produces `~/claude_code_feedback_<timestamp>.md`: a structured diagnostic dump meant to be fed back into a Claude Code session to improve this script |
+| 15 | Manage | `ai_to_usb` | Moves Ollama/LM Studio models + apps (and Bionic) to an external drive: `ditto` copy, byte-count verify (`_tree_fingerprint`), original set aside, symlink, then original removed. Never overwrites an existing destination |
+| 16 | Tools | `save_report` | Dumps a plain-text snapshot to `~/storage_report_<timestamp>.txt` |
+| 17 | Tools | `generate_feedback` | Produces `~/claude_code_feedback_<timestamp>.md`: a structured diagnostic dump meant to be fed back into a Claude Code session to improve this script |
 | 0 | — | exit | — |
 
 ### The 3-tier model (`safe_wizard`)
@@ -118,8 +119,8 @@ These hold today and any change must preserve them:
 - `cloud_audit`, `app_support_deep`, `ai_tools_audit` are read-only by design — if asked to add deletion there, route it through the same `_wiz_protected()` guard rather than writing new ad-hoc checks.
 - `_match_folder()`'s segment list is rebuilt by scanning `/Applications`, `~/Applications`, `/System/Applications`, `/Applications/Utilities` every run (`generate_feedback` only) — this is intentionally not cached; keep it that way since installed apps can change between runs.
 - The script assumes a single-user `$HOME` and does not support being run as root or against another user's home directory.
-- Tests: `bash tests/test_protected.sh` (119 checks; it also covers `_du_batch`, the new REVIEW sources, `_owner_running`, `_app_leftovers` and the Applications Manager (filters, sorts, size cache, keys), with `_to_trash` stubbed so nothing reaches the real Trash) builds a fake `$HOME` (sync engines, messaging, `com.apple.*`, mail, keychains next to ordinary caches) and checks `_wiz_protected`, `_wizard_collect`, the `quick_clean` preview, `_rm_tracked` and dry-run. **Run it after any change to `_wiz_protected`, `_wizard_collect` or `quick_clean`**, and add a fixture dir for every new protected category. The script can be `source`d without starting the menu (the entry block only runs when `BASH_SOURCE[0] = $0`), so interactive screens can be exercised headlessly by sourcing it, stubbing `clear`/`confirm`/`_back_to_menu`, and piping keystrokes in.
-- The version string appears in four places — the file header comment, the `main_menu` banner, the `safe_wizard` "pattern engine" label, and the `Generator:` line in `generate_feedback`. They are all **v3.11**, as is `VERSION` in the entry block (used by `--version`); update all five together (`grep -n 'v3\.[0-9]'`). Note this is a display version only, distinct from the historical "v3.2 rewrite" referenced above.
+- Tests: `bash tests/test_protected.sh` (129 checks; it also covers `_du_batch`, the new REVIEW sources, `_owner_running`, `_app_leftovers` and the Applications Manager (filters, sorts, size cache, keys), with `_to_trash` stubbed so nothing reaches the real Trash) builds a fake `$HOME` (sync engines, messaging, `com.apple.*`, mail, keychains next to ordinary caches) and checks `_wiz_protected`, `_wizard_collect`, the `quick_clean` preview, `_rm_tracked` and dry-run. **Run it after any change to `_wiz_protected`, `_wizard_collect` or `quick_clean`**, and add a fixture dir for every new protected category. The script can be `source`d without starting the menu (the entry block only runs when `BASH_SOURCE[0] = $0`), so interactive screens can be exercised headlessly by sourcing it, stubbing `clear`/`confirm`/`_back_to_menu`, and piping keystrokes in.
+- The version string appears in four places — the file header comment, the `main_menu` banner, the `safe_wizard` "pattern engine" label, and the `Generator:` line in `generate_feedback`. They are all **v3.12**, as is `VERSION` in the entry block (used by `--version`); update all five together (`grep -n 'v3\.[0-9]'`). Note this is a display version only, distinct from the historical "v3.2 rewrite" referenced above.
 
 ## When making changes
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║      MAC STORAGE MANAGER v3.11 — by Claude                    ║
+# ║      MAC STORAGE MANAGER v3.12 — by Claude                    ║
 # ║      Audit · Analyze · Clean · Report · Wizard · Feedback    ║
 # ╚══════════════════════════════════════════════════════════════╝
 
@@ -303,7 +303,8 @@ main_menu() {
       9) interactive_clean ;;10) time_machine_manager ;;
       11) applications_manager ;; 12) vscode_manager ;;
       13) lmstudio_manager ;; 14) ollama_manager ;;
-      15) save_report ;;     16) generate_feedback ;;
+      15) ai_to_usb ;;       16) save_report ;;
+      17) generate_feedback ;;
       0)
         local free_now; free_now=$(df -h "$DATA_VOL" | awk 'NR==2{print $4}')
         echo -e "\n  ${BGREEN}Goodbye! 👋 Free space now: ${BYELLOW}${free_now}${RESET}\n"
@@ -319,7 +320,7 @@ _main_menu_draw() {
   clear
   echo ""
   echo -e "${BMAGENTA}╔══════════════════════════════════════════════════════════╗${RESET}"
-  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.11                         ║${RESET}"
+  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.12                         ║${RESET}"
   echo -e "${BMAGENTA}║     $(date '+%a %d %b %Y — %H:%M')                              ║${RESET}"
   echo -e "${BMAGENTA}╚══════════════════════════════════════════════════════════╝${RESET}"
   echo ""
@@ -352,10 +353,11 @@ _main_menu_draw() {
   printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 12 "VSCode Extensions" "extensions: browse, delete, backup"
   printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 13 "LM Studio" "manage local AI models"
   printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 14 "Ollama" "manage Ollama AI models"
+  printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 15 "Move AI Tools to USB" "Ollama, LM Studio, Bionic · keeps the app working"
 
   menu_group "🧰 TOOLS"
-  printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 15 "Save Report to File" "export full audit"
-  printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 16 "Generate Feedback File" "diagnostic dump for Claude Code"
+  printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 16 "Save Report to File" "export full audit"
+  printf "  ${BOLD}%2d)${RESET} %-28s ${DIM}%s${RESET}\n" 17 "Generate Feedback File" "diagnostic dump for Claude Code"
 
   divider
   printf "  ${BOLD}%2d)${RESET} %-28s\n" 0 "❌ Exit"
@@ -404,7 +406,7 @@ _wiz_protected() {
 
 _wizard_header() {
   clear
-  echo -e "${BGREEN}${BOLD}🪄  SAFE CLEANUP WIZARD${RESET}  ${DIM}(v3.11 pattern engine)${RESET}"
+  echo -e "${BGREEN}${BOLD}🪄  SAFE CLEANUP WIZARD${RESET}  ${DIM}(v3.12 pattern engine)${RESET}"
   divider
   echo -e "  Offers only items that are ${BGREEN}safe by design${RESET}: caches, logs, temp & re-downloadables."
   echo -e "  It ${BRED}never${RESET} touches macOS system data, cloud sync, chats, mail, or your files."
@@ -1454,7 +1456,7 @@ generate_feedback() {
     echo ""
     echo "- Generated: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "- Host: $(hostname)"
-    echo "- Generator: storage_check.sh v3.11"
+    echo "- Generator: storage_check.sh v3.12"
     echo ""
     echo "---"
     echo ""
@@ -2490,6 +2492,162 @@ _external_volumes() {
 }
 
 # ══════════════════════════════════════════════════════════════
+#   MOVE AI TOOLS (Ollama, LM Studio, Bionic) TO USB
+# ══════════════════════════════════════════════════════════════
+# Total bytes + entry count of a tree, used to verify a copy exactly.
+_tree_fingerprint() {
+  local n b
+  n=$(find "$1" 2>/dev/null | wc -l | tr -d ' ')
+  b=$(find "$1" -type f -exec stat -f %z {} + 2>/dev/null | awk '{s+=$1} END{print s+0}')
+  echo "$n:$b"
+}
+
+# _move_path_to_usb <src> <dest_parent> : copy src under dest_parent, verify the
+# copy byte-for-byte (file count + total bytes), then swap src for a symlink.
+# The original is only deleted AFTER the link works, so there is no moment
+# where the data exists nowhere. Returns 0 moved, 1 failed, 2 skipped.
+_move_path_to_usb() {
+  local src="${1%/}" parent="$2"
+  [ -n "$src" ] && [ -n "$parent" ] || return 1
+  local name; name=$(basename "$src")
+  local dest="$parent/$name" old="$src.storagecheck-old"
+  _dry_block "moving $name" && return 2
+  if [ -L "$src" ]; then skipped "$name is already a link (already moved)"; return 2; fi
+  [ -e "$src" ] || { skipped "$name not found"; return 2; }
+  if _wiz_protected "$src"; then danger "$name is protected data — not moved"; return 2; fi
+  if [ -e "$dest" ]; then
+    warning "$name: '$dest' already exists on the drive — not touching it. Rename or remove it, then retry."
+    return 2
+  fi
+  [ -e "$old" ] && { danger "Leftover '$old' from an earlier attempt — resolve it first"; return 1; }
+
+  local kb avail
+  kb=$(du -sk "$src" 2>/dev/null | cut -f1); kb=${kb:-0}
+  avail=$(df -k "$parent" 2>/dev/null | awk 'NR==2{print $4}')
+  if [ -z "$avail" ]; then mkdir -p "$parent" 2>/dev/null; avail=$(df -k "$parent" 2>/dev/null | awk 'NR==2{print $4}'); fi
+  if [ "${avail:-0}" -le "$kb" ]; then
+    danger "$name needs $(human_kb "$kb") but only $(human_kb "${avail:-0}") is free on the drive"
+    return 1
+  fi
+  mkdir -p "$parent" 2>/dev/null || { danger "Cannot create $parent"; return 1; }
+
+  echo -n "  Copying $name ($(human_kb "$kb")) to the drive... "
+  if ! ditto "$src" "$dest" 2>/dev/null || [ "$(_tree_fingerprint "$src")" != "$(_tree_fingerprint "$dest")" ]; then
+    echo -e "${BRED}failed${RESET}"
+    danger "Copy incomplete or different from the original — '$name' left untouched."
+    [ -n "$dest" ] && [ -e "$dest" ] && rm -rf "$dest"
+    return 1
+  fi
+  echo -e "${BGREEN}verified${RESET}"
+
+  # Swap: set the original aside, link, and only then delete the original.
+  PENDING_MSG="'$name' is complete on the drive at: $dest ; the original is kept at: $old — if '$src' is missing, run: mv '$old' '$src'"
+  if ! mv "$src" "$old" 2>/dev/null; then
+    PENDING_MSG=""; danger "Could not set '$name' aside — nothing changed (the drive copy is at $dest)."; return 1
+  fi
+  if ! ln -s "$dest" "$src" 2>/dev/null; then
+    mv "$old" "$src" 2>/dev/null
+    PENDING_MSG=""; danger "Could not create the link — '$name' restored in place."; return 1
+  fi
+  PENDING_MSG=""
+  local got; got=$(_rm_tracked "$old" "$kb")
+  MOVED_KB=$((MOVED_KB + ${got:-0}))
+  if [ -e "$old" ]; then
+    warning "$name moved, but part of the original could not be removed: $old (delete it yourself)"
+  else
+    success "$name moved — freed $(human_kb "${got:-0}") on the internal disk"
+  fi
+  return 0
+}
+
+# One status line per target; sets AIT_STATE: local | linked | missing | none
+_ait_status() {
+  local p="$1"
+  if [ -L "$p" ]; then
+    if [ -e "$p" ]; then AIT_STATE=linked; AIT_NOTE="on the drive → $(readlink "$p")"
+    else AIT_STATE=linked; AIT_NOTE="${BRED}link is broken (drive unplugged, or the copy is gone)${RESET} → $(readlink "$p")"; fi
+  elif [ -e "$p" ]; then AIT_STATE=local; AIT_NOTE=""
+  else AIT_STATE=none; AIT_NOTE="not installed"; fi
+}
+
+ai_to_usb() {
+  clear
+  section "🔌 MOVE AI TOOLS TO USB"
+  echo -e "  ${DIM}Copies, verifies byte-for-byte, then leaves a link so the tool keeps working.${RESET}"
+  echo -e "  ${DIM}Nothing is deleted. Xcode is not touched. Keep the drive connected when using these.${RESET}\n"
+
+  # label | path | destination folder under the volume | process to check
+  local -a T_LABEL T_PATH T_DIR T_PROC
+  local n=0
+  _ait_add() { n=$((n+1)); T_LABEL[$n]="$1"; T_PATH[$n]="$2"; T_DIR[$n]="$3"; T_PROC[$n]="$4"; }
+  _ait_add "Ollama · models"           "$HOME/.ollama/models"            "AIOnExternal/ollama"   "ollama"
+  _ait_add "Ollama · app"              "/Applications/Ollama.app"        "AppsOnExternal"        "Ollama"
+  _ait_add "LM Studio · models"        "$HOME/.lmstudio/models"          "AIOnExternal/lmstudio" "LM Studio"
+  _ait_add "LM Studio · extensions"    "$HOME/.lmstudio/extensions"      "AIOnExternal/lmstudio" "LM Studio"
+  _ait_add "LM Studio · app"           "/Applications/LM Studio.app"     "AppsOnExternal"        "LM Studio"
+  _ait_add "Bionic · app"              "/Applications/Bionic.app"        "AppsOnExternal"        "Bionic"
+
+  local i kb
+  local -a T_MOVABLE
+  for ((i=1; i<=n; i++)); do
+    _ait_status "${T_PATH[$i]}"
+    case "$AIT_STATE" in
+      local)  kb=$(du -sk "${T_PATH[$i]}" 2>/dev/null | cut -f1); kb=${kb:-0}
+              if [ "$kb" -lt 1024 ] && [ -d "${T_PATH[$i]}" ]; then T_MOVABLE[$i]=0; echo -e "   -) ${T_LABEL[$i]}  ${DIM}under 1 MB — nothing worth moving${RESET}"; continue; fi
+              T_MOVABLE[$i]=1
+              printf "  %2d) %-26s %s\n" "$i" "${T_LABEL[$i]}" "$(_size_cell "${kb:-0}")" ;;
+      linked) T_MOVABLE[$i]=0; echo -e "   -) ${T_LABEL[$i]}  ${BGREEN}already moved${RESET} ${DIM}${AIT_NOTE}${RESET}" ;;
+      *)      T_MOVABLE[$i]=0; echo -e "   -) ${T_LABEL[$i]}  ${DIM}${AIT_NOTE}${RESET}" ;;
+    esac
+  done
+
+  _dry_block "moving AI tools" && { _back_to_menu; return; }
+  echo -ne "\n  ${BCYAN}Number(s) to move ${DIM}(e.g. 1 or 1,3-4)${RESET}${BCYAN}, blank to cancel: ${RESET}"
+  read -r sel
+  [ -z "$sel" ] && { skipped "Cancelled"; _back_to_menu; return; }
+  local -a picks chosen
+  picks=($(_parse_selection "$sel" "$n"))
+  for i in "${picks[@]}"; do
+    [ "${T_MOVABLE[$i]:-0}" -eq 1 ] && chosen+=("$i") || skipped "${T_LABEL[$i]} — nothing to move"
+  done
+  [ "${#chosen[@]}" -eq 0 ] && { warning "Nothing movable selected"; _back_to_menu; return; }
+
+  local vols; vols=$(_external_volumes)
+  [ -z "$vols" ] && { warning "No external/USB drive is mounted. Connect one and try again."; _back_to_menu; return; }
+  echo ""; info "Mounted external volumes:"
+  local -a vol_names; local idx=1 vname vavail
+  while IFS=$'\t' read -r vname vavail; do
+    vol_names[$idx]="$vname"; printf "  %2d) %-20s %s free\n" "$idx" "$vname" "$(human_kb "$vavail")"; idx=$((idx+1))
+  done <<< "$vols"
+  echo -ne "\n  ${BCYAN}Destination volume number (blank to cancel): ${RESET}"
+  read -r vsel
+  [ -z "$vsel" ] && { skipped "Cancelled"; _back_to_menu; return; }
+  local vol="${vol_names[$vsel]}"
+  { [ -n "$vol" ] && [ -d "/Volumes/$vol" ]; } || { warning "Invalid selection"; _back_to_menu; return; }
+
+  # Quit the tools first: moving a model store while it is being read/written is unsafe.
+  local busy="" proc
+  for i in "${chosen[@]}"; do
+    proc="${T_PROC[$i]}"
+    pgrep -ix "$proc" >/dev/null 2>&1 && busy="${busy:+$busy, }$proc"
+  done
+  [ -n "$busy" ] && { warning "Running now: $busy — quit it first for a safe move."; confirm "Continue anyway?" || { skipped "Cancelled"; _back_to_menu; return; }; }
+  confirm "Move ${#chosen[@]} item(s) to '$vol'? Those tools only work while the drive is connected." || { skipped "Cancelled"; _back_to_menu; return; }
+
+  MOVED_KB=0
+  local ok=0 fail=0 skip=0 rc
+  echo ""
+  for i in "${chosen[@]}"; do
+    _move_path_to_usb "${T_PATH[$i]}" "/Volumes/$vol/${T_DIR[$i]}"; rc=$?
+    case $rc in 0) ok=$((ok+1)) ;; 1) fail=$((fail+1)) ;; *) skip=$((skip+1)) ;; esac
+  done
+  echo ""; divider
+  echo -e "  Moved ${BGREEN}$ok${RESET} · skipped $skip · failed ${BRED}$fail${RESET} · freed ${BOLD}$(human_kb "$MOVED_KB")${RESET}"
+  [ "$ok" -gt 0 ] && info "Restart Ollama / LM Studio so they pick up the link. To undo: delete the link and copy the folder back from the drive."
+  _back_to_menu
+}
+
+# ══════════════════════════════════════════════════════════════
 #   MOVE APP TO USB DRIVE  (symlink trick, ditto-verified)
 # ══════════════════════════════════════════════════════════════
 _move_app_to_usb() {
@@ -2990,7 +3148,7 @@ vscode_manager() {
 # ══════════════════════════════════════════════════════════════
 #   ENTRY
 # ══════════════════════════════════════════════════════════════
-VERSION="3.11"
+VERSION="3.12"
 
 _usage() {
   cat <<USAGE
