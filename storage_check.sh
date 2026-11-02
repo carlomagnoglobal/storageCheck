@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║      MAC STORAGE MANAGER v3.12 — by Claude                    ║
+# ║      MAC STORAGE MANAGER v3.13 — by Claude                    ║
 # ║      Audit · Analyze · Clean · Report · Wizard · Feedback    ║
 # ╚══════════════════════════════════════════════════════════════╝
 
@@ -320,7 +320,7 @@ _main_menu_draw() {
   clear
   echo ""
   echo -e "${BMAGENTA}╔══════════════════════════════════════════════════════════╗${RESET}"
-  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.12                         ║${RESET}"
+  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.13                         ║${RESET}"
   echo -e "${BMAGENTA}║     $(date '+%a %d %b %Y — %H:%M')                              ║${RESET}"
   echo -e "${BMAGENTA}╚══════════════════════════════════════════════════════════╝${RESET}"
   echo ""
@@ -406,7 +406,7 @@ _wiz_protected() {
 
 _wizard_header() {
   clear
-  echo -e "${BGREEN}${BOLD}🪄  SAFE CLEANUP WIZARD${RESET}  ${DIM}(v3.12 pattern engine)${RESET}"
+  echo -e "${BGREEN}${BOLD}🪄  SAFE CLEANUP WIZARD${RESET}  ${DIM}(v3.13 pattern engine)${RESET}"
   divider
   echo -e "  Offers only items that are ${BGREEN}safe by design${RESET}: caches, logs, temp & re-downloadables."
   echo -e "  It ${BRED}never${RESET} touches macOS system data, cloud sync, chats, mail, or your files."
@@ -1073,6 +1073,7 @@ ollama_manager() {
     fi
   fi
   echo ""; info "Models re-download anytime via: ollama pull <model>"
+  _ollama_models_to_usb
   if command -v ollama >/dev/null 2>&1 && confirm "Start interactive model deletion (asks per model)?"; then
     # Read the list first: confirm() reads stdin, so it can't sit inside a
     # `ollama list | while read` pipe (it would eat the model list).
@@ -1456,7 +1457,7 @@ generate_feedback() {
     echo ""
     echo "- Generated: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "- Host: $(hostname)"
-    echo "- Generator: storage_check.sh v3.12"
+    echo "- Generator: storage_check.sh v3.13"
     echo ""
     echo "---"
     echo ""
@@ -2576,6 +2577,52 @@ _lmstudio_repoint() {
   cp "$f.storagecheck-bak" "$f"; warning "Could not edit settings.json — restored it"; return 1
 }
 
+# Asks which mounted external volume to use; sets PICKED_VOL. Returns 1 if
+# none is mounted, the choice is blank or invalid.
+_pick_volume() {
+  PICKED_VOL=""
+  local vols; vols=$(_external_volumes)
+  [ -z "$vols" ] && { warning "No external/USB drive is mounted. Connect one and try again."; return 1; }
+  echo ""; info "Mounted external volumes:"
+  local -a vol_names; local idx=1 vname vavail vsel
+  while IFS=$'\t' read -r vname vavail; do
+    vol_names[$idx]="$vname"; printf "  %2d) %-20s %s free\n" "$idx" "$vname" "$(human_kb "$vavail")"; idx=$((idx+1))
+  done <<< "$vols"
+  echo -ne "\n  ${BCYAN}Destination volume number (blank to cancel): ${RESET}"
+  read -r vsel
+  [ -z "$vsel" ] && { skipped "Cancelled"; return 1; }
+  PICKED_VOL="${vol_names[$vsel]}"
+  { [ -n "$PICKED_VOL" ] && [ -d "/Volumes/$PICKED_VOL" ]; } || { PICKED_VOL=""; warning "Invalid selection"; return 1; }
+  return 0
+}
+
+# What to do if Ollama does not see the models after they moved.
+_ollama_link_note() {
+  [ -L "$HOME/.ollama/models" ] || return 0
+  echo ""
+  info "Ollama follows the link at ~/.ollama/models, so it needs no setting. If it ever says 'no models':"
+  echo -e "  ${DIM}launchctl setenv OLLAMA_MODELS \"$(readlink "$HOME/.ollama/models")\"   (then restart the Ollama app)${RESET}"
+}
+
+# Ollama menu entry: move just ~/.ollama/models (keys and config stay local).
+_ollama_models_to_usb() {
+  local m="$HOME/.ollama/models" kb
+  if [ -L "$m" ]; then
+    if [ -e "$m" ]; then info "Models are already on the drive → $(readlink "$m")"
+    else warning "Models link is broken (drive unplugged?) → $(readlink "$m")"; fi
+    return 0
+  fi
+  [ -d "$m" ] || { info "No models folder to move."; return 0; }
+  kb=$(du -sk "$m" 2>/dev/null | cut -f1); kb=${kb:-0}
+  [ "$kb" -ge 1024 ] || { info "Models folder is under 1 MB — nothing worth moving."; return 0; }
+  confirm "Move the Ollama models ($(human_kb "$kb")) to a USB drive? (copy, verify, then link — keys/config stay local)" || return 0
+  _dry_block "moving Ollama models" && return 0
+  _pick_volume || return 0
+  pgrep -ix ollama >/dev/null 2>&1 && { warning "Ollama is running — quit it first for a safe move."; confirm "Continue anyway?" || { skipped "Cancelled"; return 0; }; }
+  MOVED_KB=0
+  _move_path_to_usb "$m" "/Volumes/$PICKED_VOL/AIOnExternal/ollama" && _ollama_link_note
+}
+
 # One status line per target; sets AIT_STATE: local | linked | missing | none
 _ait_status() {
   local p="$1"
@@ -2628,18 +2675,8 @@ ai_to_usb() {
   done
   [ "${#chosen[@]}" -eq 0 ] && { warning "Nothing movable selected"; _back_to_menu; return; }
 
-  local vols; vols=$(_external_volumes)
-  [ -z "$vols" ] && { warning "No external/USB drive is mounted. Connect one and try again."; _back_to_menu; return; }
-  echo ""; info "Mounted external volumes:"
-  local -a vol_names; local idx=1 vname vavail
-  while IFS=$'\t' read -r vname vavail; do
-    vol_names[$idx]="$vname"; printf "  %2d) %-20s %s free\n" "$idx" "$vname" "$(human_kb "$vavail")"; idx=$((idx+1))
-  done <<< "$vols"
-  echo -ne "\n  ${BCYAN}Destination volume number (blank to cancel): ${RESET}"
-  read -r vsel
-  [ -z "$vsel" ] && { skipped "Cancelled"; _back_to_menu; return; }
-  local vol="${vol_names[$vsel]}"
-  { [ -n "$vol" ] && [ -d "/Volumes/$vol" ]; } || { warning "Invalid selection"; _back_to_menu; return; }
+  _pick_volume || { _back_to_menu; return; }
+  local vol="$PICKED_VOL"
 
   # Quit the tools first: moving a model store while it is being read/written is unsafe.
   local busy="" proc
@@ -2665,11 +2702,7 @@ ai_to_usb() {
     pgrep -ix "LM Studio" >/dev/null 2>&1 && warning "Quit LM Studio first, or it may overwrite the setting."
     confirm "Also set LM Studio's models folder to $(readlink "$lmm")?" && _lmstudio_repoint "$lmm" "$(readlink "$lmm")"
   fi
-  if [ -L "$HOME/.ollama/models" ]; then
-    echo ""
-    info "Ollama follows the link at ~/.ollama/models, so it needs no setting. If it ever says 'no models':"
-    echo -e "  ${DIM}launchctl setenv OLLAMA_MODELS \"$(readlink "$HOME/.ollama/models")\"   (then restart the Ollama app)${RESET}"
-  fi
+  _ollama_link_note
   echo ""; divider
   echo -e "  Moved ${BGREEN}$ok${RESET} · skipped $skip · failed ${BRED}$fail${RESET} · freed ${BOLD}$(human_kb "$MOVED_KB")${RESET}"
   [ "$ok" -gt 0 ] && info "Restart Ollama / LM Studio so they pick up the link. To undo: delete the link and copy the folder back from the drive."
@@ -3177,7 +3210,7 @@ vscode_manager() {
 # ══════════════════════════════════════════════════════════════
 #   ENTRY
 # ══════════════════════════════════════════════════════════════
-VERSION="3.12"
+VERSION="3.13"
 
 _usage() {
   cat <<USAGE

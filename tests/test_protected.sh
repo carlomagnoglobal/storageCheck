@@ -325,6 +325,18 @@ applications_manager < <(printf 'ss') >/dev/null 2>&1   # EOF must end the loop,
 [ "$APPS_SORT" = name ] && ok "s cycles sort; EOF leaves the screen" || bad "sort → $APPS_SORT"
 DRY_RUN=1; applications_manager < <(printf 'd\nb') >/dev/null 2>&1; DRY_RUN=0
 [ -d "$SYS/One.app" ] && ok "dry-run: [d]elete removes nothing" || bad "dry-run delete removed an app"
+echo ""; echo "_ollama_models_to_usb"
+rm -f "$HOME/.ollama/models"; mk ".ollama/models/blobs" 2048
+confirm() { return 0; }; _pick_volume() { PICKED_VOL=usbvol2; return 0; }
+_move_path_to_usb() { MOVE_ARGS="$1|$2"; return 0; }
+_ollama_models_to_usb >/dev/null 2>&1
+[ "$MOVE_ARGS" = "$HOME/.ollama/models|/Volumes/usbvol2/AIOnExternal/ollama" ] && ok "Ollama option moves only ~/.ollama/models to AIOnExternal/ollama" || bad "wrong move args: $MOVE_ARGS"
+MOVE_ARGS=""; DRY_RUN=1; _ollama_models_to_usb >/dev/null 2>&1; DRY_RUN=0
+[ -z "$MOVE_ARGS" ] && ok "dry-run: Ollama option moves nothing" || bad "dry-run moved"
+rm -rf "$HOME/.ollama/models"; ln -s "$USB" "$HOME/.ollama/models"; MOVE_ARGS=""
+_ollama_models_to_usb >/dev/null 2>&1
+[ -z "$MOVE_ARGS" ] && ok "already-linked models: nothing to do" || bad "moved a link"
+rm -f "$HOME/.ollama/models"
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
