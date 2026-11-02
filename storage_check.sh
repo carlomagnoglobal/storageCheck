@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║      MAC STORAGE MANAGER v3.9 — by Claude                    ║
+# ║      MAC STORAGE MANAGER v3.10 — by Claude                    ║
 # ║      Audit · Analyze · Clean · Report · Wizard · Feedback    ║
 # ╚══════════════════════════════════════════════════════════════╝
 
@@ -319,7 +319,7 @@ _main_menu_draw() {
   clear
   echo ""
   echo -e "${BMAGENTA}╔══════════════════════════════════════════════════════════╗${RESET}"
-  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.9                         ║${RESET}"
+  echo -e "${BMAGENTA}║     🖥️  MAC STORAGE MANAGER v3.10                         ║${RESET}"
   echo -e "${BMAGENTA}║     $(date '+%a %d %b %Y — %H:%M')                              ║${RESET}"
   echo -e "${BMAGENTA}╚══════════════════════════════════════════════════════════╝${RESET}"
   echo ""
@@ -391,6 +391,9 @@ _wiz_protected() {
     *"/application support/box/"*|*com.box.desktop*|*pcloud*|*nextcloud*|*synology*|*megasync*|*"mega limited"*) return 0 ;;
     # Messaging apps
     *whatsapp*|*telegram*|*"group.net.whatsapp"*)                                        return 0 ;;
+    *"/signal/"*|*"/signal"|*org.whispersystems.signal*|*discord*|*"/slack/"*|*"/slack"|*com.tinyspeck.slackmacgap*) return 0 ;;
+    # Password managers: vaults and their local state
+    *1password*|*agilebits*|*bitwarden*|*keepass*|*lastpass*)                            return 0 ;;
     # Apple system apps & services
     *"/library/mail"*|*com.apple.mail*|*"/applications/mail.app"*|*keychain*|*"/library/photos"*|*"/applications/photos.app"*|*photoslibrary*) return 0 ;;
     # Microsoft apps
@@ -401,7 +404,7 @@ _wiz_protected() {
 
 _wizard_header() {
   clear
-  echo -e "${BGREEN}${BOLD}🪄  SAFE CLEANUP WIZARD${RESET}  ${DIM}(v3.9 pattern engine)${RESET}"
+  echo -e "${BGREEN}${BOLD}🪄  SAFE CLEANUP WIZARD${RESET}  ${DIM}(v3.10 pattern engine)${RESET}"
   divider
   echo -e "  Offers only items that are ${BGREEN}safe by design${RESET}: caches, logs, temp & re-downloadables."
   echo -e "  It ${BRED}never${RESET} touches macOS system data, cloud sync, chats, mail, or your files."
@@ -517,17 +520,67 @@ _wizard_collect() {
   done < <(find "$HOME/Library/Application Support" "$HOME/Library/Containers" \
               -maxdepth 5 -type d \( \
                  -iname "Cache" -o -iname "Caches" -o -iname "Code Cache" \
-                 -o -iname "*Cache" -o -iname "CachedData" -o -iname "CachedExtensionVSIXs" \
+                 -o -iname "*Cache" -o -iname "CacheStorage" -o -iname "CachedData" -o -iname "CachedExtensionVSIXs" \
                  -o -iname "logs" -o -iname "Crashpad" -o -iname "tmp" \
               \) -prune -print 2>/dev/null)
 
   # ───── 🟡 REVIEW: likely leftovers (no .app AND no CLI of that name) ─────
   # REVIEW, never SAFE: a dot-folder can hold models, settings or logins, and
   # "no .app found" is a guess (e.g. Homebrew's ollama CLI has no bundle).
+  local KNOWN_DOTS=" cursor windsurf trae codeium antigravity comet manus qwen wispr ollama "
   for tool in cursor windsurf trae codeium antigravity comet manus qwen wispr ollama; do
     case "$INSTALLED" in *" $tool "*|*"$tool"*) continue ;; esac   # app present → skip
     command -v "$tool" >/dev/null 2>&1 && continue                  # CLI present → skip
     add_candidate REVIEW "$HOME/.$tool"                          "Leftover? · .$tool"       "No app or CLI found — check before deleting"
+  done
+
+  # Any other big dot-folder (>200MB) with no matching app or CLI. Pattern-based
+  # instead of one hardcoded name per tool. Config/credential/toolchain homes are
+  # excluded; REVIEW only (Trash, undoable) — "no app found" is just a guess.
+  local dd dname
+  for dd in "$HOME"/.[!.]*; do
+    [ -d "$dd" ] && [ ! -L "$dd" ] || continue
+    dname=${dd##*/.}
+    case " $KNOWN_DOTS " in *" $dname "*) continue ;; esac
+    case "$dname" in
+      Trash|ssh|gnupg|aws|kube|config|local|cache|nvm|npm|cargo|rustup|gradle|m2|cocoapods|docker|vscode|lmstudio|claude|zsh_sessions|git*|CFUserTextEncoding) continue ;;
+    esac
+    case "$INSTALLED" in *" $dname "*) continue ;; esac
+    command -v "$dname" >/dev/null 2>&1 && continue
+    add_candidate REVIEW "$dd" "Large dot-folder · .$dname" "No matching app or CLI found — may hold settings or models, check first" 204800
+  done
+
+  # ───── 🟡 REVIEW: JetBrains per-version data (keep newest per product) ─────
+  # Application Support/JetBrains/IntelliJIdea2024.1, ...2025.1: older ones are
+  # stale after an upgrade. The newest of each product is never offered.
+  local jb jbroot jbname jbprod jbseen=" "
+  for jbroot in "$HOME/Library/Application Support/JetBrains" "$HOME/Library/Caches/JetBrains"; do
+    [ -d "$jbroot" ] || continue
+    jbseen=" "
+    while IFS= read -r jb; do
+      jbname=${jb##*/}
+      jbprod=${jbname%%[0-9]*}
+      [ -n "$jbprod" ] && [ "$jbprod" != "$jbname" ] || continue    # no version digits → not versioned data
+      case "$jbseen" in *" $jbprod "*) ;; *) jbseen="$jbseen$jbprod "; continue ;; esac   # newest: keep
+      add_candidate REVIEW "$jb" "JetBrains old version · $jbname" "Superseded by a newer install — settings/caches of the old version" 10240
+    done < <(ls -1d "$jbroot"/*/ 2>/dev/null | sed 's:/$::' | sort -rV)
+  done
+
+  # ───── 🟡 REVIEW: old Node versions under nvm (keep newest + the active one) ─────
+  local nv nvname nvkeep newest="" cur=""
+  if [ -d "$HOME/.nvm/versions/node" ]; then
+    newest=$(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | sort -V | tail -1)
+    cur=$(node -v 2>/dev/null)
+    for nv in "$HOME/.nvm/versions/node"/*/; do
+      nvname=$(basename "$nv")
+      [ "$nvname" = "$newest" ] || [ "$nvname" = "$cur" ] && continue
+      add_candidate REVIEW "${nv%/}" "Node $nvname (nvm)" "Old Node version — nvm install $nvname restores it" 10240
+    done
+  fi
+
+  # ───── 🟡 REVIEW: ~/.local/share children (per child, never the whole tree) ─────
+  for d in "$HOME/.local/share"/*; do
+    add_candidate REVIEW "$d" "~/.local/share · $(basename "$d")" "Tool data — may hold models or state, check first" 102400
   done
 
   # ───── 🟡 REVIEW: large but re-downloadable / re-installable ─────
@@ -1325,11 +1378,21 @@ generate_feedback() {
       local nm=$(basename "$app" .app | tr '[:upper:]' '[:lower:]')
       APP_NAMES+=("$nm")
       # app-name tokens (split on space/punct)
-      for t in $(echo "$nm" | tr -cs 'a-z0-9' ' '); do _add_seg "$t"; done
+      for t in $(echo "$nm" | tr -cs 'a-z0-9' ' '); do _add_seg "$t"; _add_seg "$(echo "$t" | tr -d '0-9')"; done
       local b=$(_bid "$app" | tr '[:upper:]' '[:lower:]')
       [ -n "$b" ] && { APP_BIDS+=("$b"); for t in $(echo "$b" | tr '.' ' '); do _add_seg "$t"; done; }
     done
   done
+
+  # Homebrew casks count as installed (iTerm2's app is "iTerm", so its
+  # "iTerm2" folders would otherwise look orphaned). Skipped without brew.
+  if command -v brew >/dev/null 2>&1; then
+    local cask ct
+    while IFS= read -r cask; do
+      [ -z "$cask" ] && continue
+      for ct in $(echo "$cask" | tr -cs 'a-z0-9' ' '); do _add_seg "$ct"; _add_seg "$(echo "$ct" | tr -d '0-9')"; done
+    done < <(brew list --cask 2>/dev/null)
+  fi
 
   # Classify a Library subfolder name. Returns:
   #   APPLE-SYSTEM  → com.apple.* (never deletable; OS-owned)
@@ -1347,7 +1410,12 @@ generate_feedback() {
     for tok in $(echo "$stripped" | tr -cs 'a-z0-9' ' '); do
       [ ${#tok} -ge 4 ] || continue
       case "$SEG" in *" $tok "*) echo "MATCHED (seg:$tok)"; return ;; esac
+      # "iterm2" vs app "iTerm": retry without trailing digits
+      local nod=$(echo "$tok" | tr -d '0-9')
+      [ ${#nod} -ge 4 ] && [ "$nod" != "$tok" ] && case "$SEG" in *" $nod "*) echo "MATCHED (seg:$nod)"; return ;; esac
     done
+    # Language servers / CLIs keep data here but are not apps — don't call them leftovers
+    case "$f" in *languageserver*|*language-server*|*cli) echo "TOOL-DATA"; return ;; esac
     echo "ORPHAN?"
   }
 
@@ -1359,7 +1427,7 @@ generate_feedback() {
     echo ""
     echo "- Generated: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "- Host: $(hostname)"
-    echo "- Generator: storage_check.sh v3.9"
+    echo "- Generator: storage_check.sh v3.10"
     echo ""
     echo "---"
     echo ""
@@ -1423,7 +1491,9 @@ generate_feedback() {
     echo " 3) strip a 10-char team-id prefix and one reverse-dns prefix (group/com/org/net/io/ai/im/md/dev),"
     echo "    split into tokens; any token >=4 chars that equals a token of an installed app name or bundle id"
     echo "    => MATCHED (segment match, never substring)"
-    echo " 4) else => ORPHAN?"
+    echo " 3b) also tries the token without trailing digits (iterm2 ~ iTerm); Homebrew casks count as installed"
+    echo " 4) names like *languageserver* / *cli => TOOL-DATA (tool data, not an app leftover)"
+    echo " 5) else => ORPHAN?"
     echo '```'
     echo "### 2b. Wizard SAFE rules (pattern-based)"
     echo '```'
@@ -1525,9 +1595,17 @@ generate_feedback() {
       local name="${area%%:*}" path="${area#*:}"
       [ -d "$path" ] || continue
       echo ""; echo "### $name"; echo '```'
-      du -sh "$path"/*/ 2>/dev/null | sort -rh | while read sz p; do
-        printf "%-8s %-44s %s\n" "$sz" "$(basename "$p")" "$(_match_folder "$(basename "$p")")"
-      done
+      local hidden=0 res
+      while read sz p; do
+        res=$(_match_folder "$(basename "$p")")
+        # ORPHAN? rows under 100K are noise: counted, not listed
+        if [ "$res" = "ORPHAN?" ]; then
+          case "$sz" in *B) hidden=$((hidden+1)); continue ;; esac
+          case "$sz" in [0-9]K|[0-9].[0-9]K|[0-9][0-9]K) hidden=$((hidden+1)); continue ;; esac
+        fi
+        printf "%-8s %-44s %s\n" "$sz" "$(basename "$p")" "$res"
+      done < <(du -sh "$path"/*/ 2>/dev/null | sort -rh)
+      [ "$hidden" -gt 0 ] && echo "($hidden ORPHAN? rows under 100K hidden)"
       echo '```'
     done
   } >> "$FB"
@@ -2885,7 +2963,7 @@ vscode_manager() {
 # ══════════════════════════════════════════════════════════════
 #   ENTRY
 # ══════════════════════════════════════════════════════════════
-VERSION="3.9"
+VERSION="3.10"
 
 _usage() {
   cat <<USAGE

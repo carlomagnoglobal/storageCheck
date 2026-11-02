@@ -51,6 +51,12 @@ PROTECTED_DIRS=(
   "Library/Logs/com.apple.xpc.launchd"
   "Library/Saved Application State/com.apple.Terminal.savedState"
   "Library/Mail/V10/cache"
+  "Library/Application Support/1Password/Cache"
+  "Library/Caches/com.bitwarden.desktop"
+  "Library/Application Support/Signal/Cache"
+  "Library/Application Support/discord/Cache"
+  "Library/Application Support/Slack/Cache"
+  "Library/Caches/com.tinyspeck.slackmacgap"
   "Library/Keychains/login"
 )
 SAFE_DIRS=(
@@ -60,6 +66,7 @@ SAFE_DIRS=(
   "Library/Logs/SomeApp"
   "Library/Application Support/Code/Cache"
   "Library/Application Support/Code/CachedData"
+  "Library/Application Support/Foo/Service Worker/CacheStorage"
   "Library/Containers/com.example.app/Data/Library/Caches"
   ".Trash"
 )
@@ -149,6 +156,12 @@ dd if=/dev/zero of="$HOME/Downloads/new.dmg" bs=1024 count=12288 2>/dev/null
 mk "code/oldproj/node_modules/pkg" 12288; old "code/oldproj/node_modules"
 mk "code/newproj/node_modules/pkg" 12288
 mk "code/oldproj/node_modules/pkg/node_modules/x" 12288; old "code/oldproj/node_modules/pkg/node_modules"; old "code/oldproj/node_modules"
+mk "Library/Application Support/JetBrains/IntelliJIdea2024.1" 12288
+mk "Library/Application Support/JetBrains/IntelliJIdea2025.1" 12288
+mk "Library/Application Support/JetBrains/Toolbox" 12288
+mk ".nvm/versions/node/v18.0.0" 12288; mk ".nvm/versions/node/v22.0.0" 12288
+mk ".local/share/bigtool" 204800
+mk ".mysterytool" 204800; mk ".ssh" 204800
 _wizard_collect >/dev/null 2>&1
 tier_of() { local c t kb p l n; for c in "${CANDIDATES[@]}"; do IFS='|' read -r t kb p l n <<< "$c"; [ "$p" = "$HOME/$1" ] && { echo "$t"; return; }; done; echo none; }
 [ "$(tier_of .npm/_cacache)" = REVIEW ]                  && ok "npm cache is REVIEW"            || bad "npm cache: $(tier_of .npm/_cacache)"
@@ -157,6 +170,13 @@ tier_of() { local c t kb p l n; for c in "${CANDIDATES[@]}"; do IFS='|' read -r 
 [ "$(tier_of code/oldproj/node_modules)" = REVIEW ]     && ok "stale node_modules is REVIEW"   || bad "stale node_modules: $(tier_of code/oldproj/node_modules)"
 [ "$(tier_of code/newproj/node_modules)" = none ]       && ok "fresh node_modules not offered" || bad "fresh node_modules offered"
 [ "$(tier_of code/oldproj/node_modules/pkg/node_modules)" = none ] && ok "nested node_modules not listed separately" || bad "nested node_modules listed"
+[ "$(tier_of "Library/Application Support/JetBrains/IntelliJIdea2024.1")" = REVIEW ] && ok "old JetBrains version is REVIEW" || bad "old JetBrains version not offered"
+[ "$(tier_of "Library/Application Support/JetBrains/IntelliJIdea2025.1")" = none ] && ok "newest JetBrains version kept" || bad "newest JetBrains version offered"
+[ "$(tier_of "Library/Application Support/JetBrains/Toolbox")" = none ] && ok "unversioned JetBrains dir kept" || bad "Toolbox offered"
+[ "$(tier_of .nvm/versions/node/v18.0.0)" = REVIEW ] && [ "$(tier_of .nvm/versions/node/v22.0.0)" = none ] && ok "old nvm Node REVIEW, newest kept" || bad "nvm: v18=$(tier_of .nvm/versions/node/v18.0.0) v22=$(tier_of .nvm/versions/node/v22.0.0)"
+[ "$(tier_of .local/share/bigtool)" = REVIEW ] && ok "~/.local/share child is REVIEW" || bad "local/share: $(tier_of .local/share/bigtool)"
+[ "$(tier_of .mysterytool)" = REVIEW ] && ok "big unknown dot-folder is REVIEW" || bad "dot-folder: $(tier_of .mysterytool)"
+[ "$(tier_of .ssh)" = none ] && ok ".ssh never offered" || bad ".ssh offered"
 
 echo ""; echo "_owner_running"
 _running_snapshot
